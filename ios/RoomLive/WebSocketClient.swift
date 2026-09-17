@@ -18,12 +18,14 @@ final class WebSocketClient: NSObject {
     private var sessionCode: String = ""
     /// True after a successful join send once the socket is open.
     private var didJoin = false
+    private var joinRetryScheduled = false
     var onStatus: ((String) -> Void)?
 
     func connect(hostPort: String, sessionCode: String) throws {
         disconnect()
         self.sessionCode = sessionCode.uppercased()
         self.didJoin = false
+        self.joinRetryScheduled = false
 
         var raw = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("http://") { raw = String(raw.dropFirst(7)) }
@@ -44,8 +46,7 @@ final class WebSocketClient: NSObject {
         onStatus?("подключение…")
         task.resume()
         listen()
-        // Do NOT join here — URLSessionWebSocketTask may drop/err sends before open.
-        // join() runs from didOpenWithProtocol.
+        // Join on didOpen AND on server `hello` — some iOS paths skip/flaky didOpen.
     }
 
     func disconnect() {
@@ -54,7 +55,10 @@ final class WebSocketClient: NSObject {
         session?.invalidateAndCancel()
         session = nil
         didJoin = false
+        joinRetryScheduled = false
     }
+
+    var isJoined: Bool { didJoin }
 
     func sendJSON(_ object: [String: Any]) {
         guard let task else {
@@ -64,6 +68,7 @@ final class WebSocketClient: NSObject {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8) else {
+            onStatus?("отправка: JSON invalid")
             return
         }
         task.send(.string(text)) { [weak self] error in
@@ -84,6 +89,17 @@ final class WebSocketClient: NSObject {
         onStatus?("код \(sessionCode)")
     }
 
+    private func scheduleJoinRetry() {
+        guard !joinRetryScheduled else { return }
+        joinRetryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            self.joinRetryScheduled = false
+            self.didJoin = false
+            self.join()
+        }
+    }
+
     private func listen() {
         task?.receive { [weak self] result in
             guard let self else { return }
@@ -97,20 +113,28 @@ final class WebSocketClient: NSObject {
                    let type = json["type"] as? String {
                     switch type {
                     case "hello":
-                        // Server hello can arrive before join; join is gated on didOpen.
-                        break
+                        // Server always sends hello first; join here if didOpen was flaky.
+                        if !self.didJoin {
+                            self.join()
+                        }
                     case "joined":
                         self.onStatus?("в сессии \(self.sessionCode)")
                     case "ack":
-                        if let viewers = json["viewers"] as? Int {
+                        if let of = json["of"] as? String, of == "mesh_update",
+                           let viewers = json["viewers"] as? Int {
+                            if viewers == 0 {
+                                self.onStatus?("сайт не в сессии — открой тот же код")
+                            } else {
+                                self.onStatus?("зрителей: \(viewers)")
+                            }
+                        } else if let viewers = json["viewers"] as? Int {
                             self.onStatus?("зрителей: \(viewers)")
                         }
                     case "error":
                         let m = json["message"] as? String ?? "error"
                         self.onStatus?("ошибка: \(m)")
-                        // If join was rejected before we were open, retry once socket is joined.
-                        if !self.didJoin, m == "unknown_type" || m == "invalid_code" {
-                            // leave for didOpen / manual reconnect
+                        if m == "not_phone" || m == "invalid_code" {
+                            self.scheduleJoinRetry()
                         }
                     default:
                         break

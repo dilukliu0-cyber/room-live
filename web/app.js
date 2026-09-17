@@ -95,12 +95,9 @@ function upsertMeshChunk(chunk) {
   let root = meshChunkMap.get(id);
   if (!root) {
     const geo = new THREE.BufferGeometry();
-    const mat = new THREE.MeshStandardMaterial({
+    const mat = new THREE.MeshBasicMaterial({
       vertexColors: true,
-      metalness: 0.05,
-      roughness: 0.85,
       side: THREE.DoubleSide,
-      flatShading: true,
     });
     root = new THREE.Mesh(geo, mat);
     root.castShadow = false;
@@ -484,7 +481,8 @@ function connect(codeToJoin) {
       case 'mesh_update':
         meshUpdateCount += 1;
         applyMeshPayload(msg);
-        setStatus(`LiDAR live · ${meshChunkMap.size} chunks`, 'ok');
+        setStatus(`LiDAR live · ${meshChunkMap.size} chunks · #${meshUpdateCount}`, 'ok');
+        console.log('[room-live] mesh_update', (msg.chunks||[]).length, 'chunks');
         break;
       case 'error':
         setStatus(`ошибка: ${msg.message}`, 'err');

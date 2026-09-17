@@ -19,11 +19,18 @@ final class MeshScanModel: NSObject, ObservableObject {
     private let minInterval: TimeInterval = 0.4
     /// Keep every Nth face when packing (1 = all). Raised automatically if payload is huge.
     private var faceStride = 1
-    private let maxPayloadBytes = 1_800_000
+    /// Cap to reduce WS frame failures on phone hotspot / LAN.
+    private let maxPayloadBytes = 600_000
+    /// start() may race ahead of MeshARViewContainer.attach(session).
+    private var pendingStart = false
 
     func attach(session: ARSession) {
         self.session = session
         session.delegate = self
+        if pendingStart {
+            pendingStart = false
+            start()
+        }
     }
 
     func connect(host: String, code: String) throws {
@@ -42,7 +49,12 @@ final class MeshScanModel: NSObject, ObservableObject {
     }
 
     func start() {
-        guard let session else { return }
+        guard let session else {
+            // ARView not ready yet — queue until attach()
+            pendingStart = true
+            return
+        }
+        pendingStart = false
         let supportsMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
         let supportsClassified = ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
         guard supportsMesh || supportsClassified else {
@@ -68,6 +80,7 @@ final class MeshScanModel: NSObject, ObservableObject {
     }
 
     func stop() {
+        pendingStart = false
         sendTimer?.invalidate()
         sendTimer = nil
         session?.pause()
@@ -98,43 +111,69 @@ final class MeshScanModel: NSObject, ObservableObject {
             return
         }
 
-        var chunks: [[String: Any]] = []
-        var totalVerts = 0
-        var totalFaces = 0
+        // Prefer fewer faces over silence: pack, and if oversize, bump stride and re-pack same tick.
+        var sent = false
+        for _ in 0..<6 {
+            var chunks: [[String: Any]] = []
+            var totalVerts = 0
+            var totalFaces = 0
 
-        for (idx, anchor) in meshAnchors.enumerated() {
-            guard let packed = packAnchor(anchor, index: idx, frame: frame, faceStride: faceStride) else { continue }
-            totalVerts += packed.vertexCount
-            totalFaces += packed.faceCount
-            chunks.append(packed.dict)
-        }
+            for (idx, anchor) in meshAnchors.enumerated() {
+                guard let packed = packAnchor(anchor, index: idx, frame: frame, faceStride: faceStride) else { continue }
+                totalVerts += packed.vertexCount
+                totalFaces += packed.faceCount
+                chunks.append(packed.dict)
+            }
 
-        guard !chunks.isEmpty else { return }
+            guard !chunks.isEmpty else { return }
 
-        let payload: [String: Any] = [
-            "type": "mesh_update",
-            "chunks": chunks,
-        ]
+            // Try full set, then progressively fewer chunks if still oversized.
+            var attemptChunks = chunks
+            while !attemptChunks.isEmpty {
+                let payload: [String: Any] = [
+                    "type": "mesh_update",
+                    "chunks": attemptChunks,
+                ]
+                guard JSONSerialization.isValidJSONObject(payload),
+                      let data = try? JSONSerialization.data(withJSONObject: payload) else {
+                    return
+                }
 
-        guard JSONSerialization.isValidJSONObject(payload),
-              let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+                if data.count <= maxPayloadBytes {
+                    ws.sendJSON(payload)
+                    meshStats = "якорей: \(attemptChunks.count)/\(chunks.count) · verts \(totalVerts) · faces \(totalFaces) · stride \(faceStride) · \(data.count / 1024)KB"
+                    sent = true
+                    break
+                }
 
-        if data.count > maxPayloadBytes && faceStride < 8 {
-            faceStride *= 2
-            meshStats = "якорей: \(chunks.count) · ↓faceStride \(faceStride) (\(data.count / 1024)KB)"
-            return
-        }
+                // Still too big with current stride — drop half the chunks same tick.
+                if attemptChunks.count > 1 {
+                    attemptChunks = Array(attemptChunks.prefix(max(1, attemptChunks.count / 2)))
+                    continue
+                }
+                // Single chunk still too big: bump stride and re-pack outer loop.
+                break
+            }
 
-        if data.count > maxPayloadBytes {
-            let limited = Array(chunks.prefix(max(1, chunks.count / 2)))
+            if sent { break }
+
+            if faceStride < 16 {
+                faceStride *= 2
+                continue
+            }
+
+            // Last resort: send whatever limited chunks we can (even if oversize-ish) — prefer attempt over silence.
+            let limited = Array(chunks.prefix(1))
             let slim: [String: Any] = ["type": "mesh_update", "chunks": limited]
             ws.sendJSON(slim)
-            meshStats = "якорей: \(limited.count)/\(chunks.count) · verts \(totalVerts) · \(data.count / 1024)KB"
-            return
+            meshStats = "якорей: 1/\(chunks.count) · ↓stride \(faceStride) (forced)"
+            sent = true
+            break
         }
 
-        ws.sendJSON(payload)
-        meshStats = "якорей: \(chunks.count) · verts \(totalVerts) · faces \(totalFaces) · \(data.count / 1024)KB"
+        if !sent {
+            meshStats = "не удалось упаковать mesh (stride \(faceStride))"
+        }
     }
 
     private struct PackedMesh {
