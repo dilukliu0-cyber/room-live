@@ -1,0 +1,15 @@
+<!-- Merge into your app Info.plist / target Info -->
+
+<key>NSCameraUsageDescription</key>
+<string>Нужна камера для сканирования комнаты (RoomPlan)</string>
+
+<key>NSLocalNetworkUsageDescription</key>
+<string>Нужен доступ к локальной сети для стрима скана на Room Live сервер</string>
+
+<key>NSAppTransportSecurity</key>
+<dict>
+  <key>NSAllowsLocalNetworking</key>
+  <true/>
+</dict>
+
+<!-- WebSocket URL scheme: ws://HOST:8787 -->

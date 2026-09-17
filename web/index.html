@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Room Live — сканирование комнаты</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">◈</span>
+        <span>Room Live</span>
+      </div>
+      <div class="status" id="status">подключение…</div>
+    </header>
+
+    <aside class="panel">
+      <p class="hint">Открой приложение и введи код</p>
+      <div class="code" id="sessionCode">····</div>
+      <div class="meta" id="meta">ожидание iPhone…</div>
+      <div class="actions">
+        <button type="button" id="btnDemo" class="btn primary">Демо</button>
+        <button type="button" id="btnClear" class="btn ghost">Очистить</button>
+        <button type="button" id="btnNew" class="btn ghost">Новый код</button>
+      </div>
+      <p class="foot">Стены / двери / окна / мебель обновляются в реальном времени</p>
+    </aside>
+
+    <main id="viewport"></main>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

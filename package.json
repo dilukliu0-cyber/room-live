@@ -1,0 +1,10 @@
+{
+  "name": "room-live",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Live room scanning: iPhone RoomPlan → WebSocket → Three.js viewer",
+  "scripts": {
+    "server": "npm --prefix server start",
+    "install:server": "npm --prefix server install"
+  }
+}
