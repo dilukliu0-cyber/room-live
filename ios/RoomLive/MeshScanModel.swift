@@ -27,7 +27,7 @@ final class MeshScanModel: NSObject, ObservableObject {
     private var pendingStart = false
 
     /// Last good RGB (0…1) per vertex index, keyed by mesh-anchor UUID.
-    private var lastColorsByAnchor: [UUID: [SIMD3<Float>]] = [:]
+    private var lastColorsByAnchor: [UUID: [Int: SIMD3<Float>]] = [:]
 
     /// Per-frame RGB cache (row-major RGB888, size = width*height*3).
     private var rgbCache: [UInt8] = []
@@ -233,14 +233,7 @@ final class MeshScanModel: NSObject, ObservableObject {
         vertices.reserveCapacity(sortedOld.count * 3)
         colors.reserveCapacity(sortedOld.count * 3)
 
-        var prev = lastColorsByAnchor[anchor.identifier] ?? []
-        // Grow prev to cover max old index we may sample (by remapped new length we store by newIdx).
-        var nextColors = [SIMD3<Float>](repeating: SIMD3(0.55, 0.55, 0.55), count: sortedOld.count)
-        if prev.count != sortedOld.count {
-            // Best-effort: keep what we can by old vertex index via previous packing size mismatch — soft reset.
-            prev = []
-        }
-
+        var colorMap = lastColorsByAnchor[anchor.identifier] ?? [:]
         var coloredCount = 0
 
         for (newIdx, oldIdx) in sortedOld.enumerated() {
@@ -254,27 +247,29 @@ final class MeshScanModel: NSObject, ObservableObject {
                 round3(Double(world.z)),
             ])
 
+            let chosen: SIMD3<Float>
             if let rgb = sampleColorFromCache(worldPosition: world, frame: frame) {
-                nextColors[newIdx] = rgb
+                chosen = rgb
+                colorMap[oldIdx] = rgb
                 coloredCount += 1
-            } else if newIdx < prev.count {
+            } else if let prev = colorMap[oldIdx] {
                 // Keep last good color — do NOT paint uniform grey over the mesh.
-                nextColors[newIdx] = prev[newIdx]
+                chosen = prev
                 coloredCount += 1
             } else {
-                // Brand-new vertex with no sample yet: soft neutral (only once).
-                nextColors[newIdx] = SIMD3(0.52, 0.53, 0.54)
+                // Brand-new vertex with no valid sample yet: soft neutral only once.
+                chosen = SIMD3(0.52, 0.53, 0.54)
+                colorMap[oldIdx] = chosen
             }
 
-            let c = nextColors[newIdx]
             colors.append(contentsOf: [
-                round3(Double(c.x)),
-                round3(Double(c.y)),
-                round3(Double(c.z)),
+                round3(Double(chosen.x)),
+                round3(Double(chosen.y)),
+                round3(Double(chosen.z)),
             ])
         }
 
-        lastColorsByAnchor[anchor.identifier] = nextColors
+        lastColorsByAnchor[anchor.identifier] = colorMap
 
         var indices: [Int] = []
         indices.reserveCapacity(keptTris.count * 3)
