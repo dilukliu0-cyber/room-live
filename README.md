@@ -95,3 +95,8 @@ room-live/
 ## English (short)
 
 Live room scan MVP: RoomPlan on iPhone streams JSON over WebSocket; browser rebuilds the room with Three.js. Run `npm install && npm start` in `server/`, open port **8787**, use **Demo** without a phone. Physical LiDAR iPhone + Xcode required for real scans (`ios/README.md`). Session codes are 4 characters; roles `phone` / `web`.
+
+## Скачать IPA для iPhone
+
+GitHub Actions собирает артефакт **RoomLive-unsigned.ipa** (вкладка Actions → Build IPA → Artifacts).  
+Установка: Sideloadly / AltStore (подпись своим Apple ID). Xcode на твоём ПК не обязателен.
