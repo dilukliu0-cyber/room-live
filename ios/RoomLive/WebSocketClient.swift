@@ -83,7 +83,7 @@ final class WebSocketClient: NSObject {
         task.send(.string(text)) { [weak self] error in
             if let error {
                 DispatchQueue.main.async {
-                    self?.onStatus?("отправка: \(error.localizedDescription)")
+                    self?.onStatus?("не достучался до сервера: \(error.localizedDescription)")
                 }
             }
         }
@@ -110,8 +110,8 @@ final class WebSocketClient: NSObject {
                 self.joinRetryTimer = nil
                 return
             }
-            if self.joinAttempts >= 20 {
-                self.onStatus?("не достучался до сервера — IP/код/Локальная сеть")
+            if self.joinAttempts >= 15 {
+                self.onStatus?("не достучался до сервера")
                 self.joinRetryTimer?.invalidate()
                 self.joinRetryTimer = nil
                 return
@@ -130,7 +130,7 @@ final class WebSocketClient: NSObject {
             switch result {
             case .failure(let error):
                 DispatchQueue.main.async {
-                    self.onStatus?("связь: \(error.localizedDescription)")
+                    self.onStatus?("не достучался до сервера: \(error.localizedDescription)")
                 }
             case .success(let message):
                 if case .string(let text) = message,
@@ -191,7 +191,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate, URLSessionTaskDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error {
-            onStatus?("не достучался: \(error.localizedDescription)")
+            onStatus?("не достучался до сервера: \(error.localizedDescription)")
         }
     }
 }

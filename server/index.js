@@ -22,6 +22,24 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, sessions: sessions.size });
 });
 
+app.get('/debug', (_req, res) => {
+  const out = [];
+  for (const [code, s] of sessions.entries()) {
+    const phone = s.phone;
+    out.push({
+      code,
+      phoneConnected: !!(phone && phone.readyState === 1),
+      phoneRemote: phone && phone._socket ? `${phone._socket.remoteAddress}:${phone._socket.remotePort}` : null,
+      viewers: s.webs.size,
+      webRemotes: [...s.webs].map((w) => {
+        const sock = w._socket;
+        return sock ? `${sock.remoteAddress}:${sock.remotePort}` : null;
+      }),
+    });
+  }
+  res.json({ ok: true, sessions: out, count: out.length });
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, maxPayload: MAX_WS_PAYLOAD });
 
@@ -68,9 +86,17 @@ function broadcastToWebs(session, obj, except = null) {
   }
 }
 
-wss.on('connection', (ws) => {
+function remoteOf(ws) {
+  const sock = ws && ws._socket;
+  if (!sock) return 'unknown';
+  return `${sock.remoteAddress || '?'}:${sock.remotePort || '?'}`;
+}
+
+wss.on('connection', (ws, req) => {
   /** @type {{ role: string | null, code: string | null }} */
   const meta = { role: null, code: null };
+  const remote = (req && req.socket && `${req.socket.remoteAddress}:${req.socket.remotePort}`) || remoteOf(ws);
+  console.log(`[room-live] ws connection from ${remote}`);
 
   send(ws, { type: 'hello', message: 'room-live relay' });
 
@@ -127,7 +153,7 @@ wss.on('connection', (ws) => {
           try { session.phone.close(); } catch (_) {}
         }
         session.phone = ws;
-        console.log(`[room-live] join phone code=${key} viewers=${session.webs.size}`);
+        console.log(`[room-live] join phone code=${key} viewers=${session.webs.size} remote=${remoteOf(ws)}`);
         send(ws, {
           type: 'joined',
           code: key,
@@ -137,7 +163,7 @@ wss.on('connection', (ws) => {
         broadcastToWebs(session, { type: 'phone_joined', code: key });
       } else {
         session.webs.add(ws);
-        console.log(`[room-live] join web code=${key} phone=${!!(session.phone && session.phone.readyState === 1)}`);
+        console.log(`[room-live] join web code=${key} phone=${!!(session.phone && session.phone.readyState === 1)} remote=${remoteOf(ws)}`);
         send(ws, {
           type: 'joined',
           code: key,

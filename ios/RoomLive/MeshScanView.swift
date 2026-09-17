@@ -11,6 +11,8 @@ struct MeshScanView: View {
     @StateObject private var model = MeshScanModel()
     @State private var errorText: String?
 
+    private var notInSession: Bool { !model.isJoined }
+
     var body: some View {
         ZStack {
             MeshARViewContainer(model: model)
@@ -42,6 +44,18 @@ struct MeshScanView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .padding()
+
+                if notInSession {
+                    Text("НЕТ СЕССИИ — телефон не в комнате сервера")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(16)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.red.opacity(0.85))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal)
+                }
 
                 Spacer()
 

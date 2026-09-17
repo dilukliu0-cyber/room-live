@@ -173,8 +173,8 @@ function applyMeshPayload(msg) {
     const attr = m.geometry?.getAttribute('position');
     return acc + (attr ? attr.count : 0);
   }, 0);
-  metaEl.textContent = `LiDAR mesh В· С‡Р°РЅРєРѕРІ: ${meshChunkMap.size} В· РІРµСЂС€РёРЅ: ${nV}`;
-  setStatus(`LiDAR live В· ${meshChunkMap.size} chunks В· ${nV} verts`, 'ok');
+  metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}`;
+  setStatus(`LiDAR live · ${meshChunkMap.size} chunks · ${nV} verts`, 'ok');
   const now = performance.now();
   // Fit on every update for the first 15, then ~1s.
   if (meshUpdateCount <= 15 || now - lastFitAt > 1000) {
@@ -206,10 +206,25 @@ function setStatus(text, kind = '') {
 }
 
 const debugEl = $('debugLine');
+const phoneBannerEl = $('phoneBanner');
+let phoneConnected = false;
+
+function setPhoneBanner(connected) {
+  phoneConnected = !!connected;
+  if (!phoneBannerEl) return;
+  if (connected) {
+    phoneBannerEl.textContent = 'Телефон подключён';
+    phoneBannerEl.className = 'phone-banner ok';
+  } else {
+    phoneBannerEl.textContent = 'Телефон не подключён';
+    phoneBannerEl.className = 'phone-banner warn';
+  }
+}
+
 function setDebug(type, chunks) {
   if (!debugEl) return;
-  const n = typeof chunks === 'number' ? chunks : 'вЂ”';
-  debugEl.textContent = `dbg: last=${type || 'вЂ”'} В· chunks=${n} В· map=${meshChunkMap.size}`;
+  const n = typeof chunks === 'number' ? chunks : '—';
+  debugEl.textContent = `dbg: last=${type || '—'} · chunks=${n} · map=${meshChunkMap.size}`;
 }
 
 function resize() {
@@ -246,7 +261,7 @@ function clearRoom() {
   }
   entityMap.clear();
   clearMeshes();
-  metaEl.textContent = 'СЃС†РµРЅР° РѕС‡РёС‰РµРЅР°';
+  metaEl.textContent = 'сцена очищена';
 }
 
 function makeLabel(text) {
@@ -353,7 +368,7 @@ function upsertOpening(item, kind) {
     root = new THREE.Group();
     root.add(mesh);
     root.userData.mesh = mesh;
-    const label = makeLabel(kind === 'window' ? 'РѕРєРЅРѕ' : 'РґРІРµСЂСЊ');
+    const label = makeLabel(kind === 'window' ? 'окно' : 'дверь');
     label.position.y = 0.7;
     root.add(label);
     roomGroup.add(root);
@@ -430,8 +445,8 @@ function applyRoomPayload(msg) {
 
   const nW = walls.length;
   const nO = objects.length + doors.length + windows.length;
-  metaEl.textContent = `СЃС‚РµРЅС‹: ${nW} В· РѕР±СЉРµРєС‚С‹: ${nO}` +
-    (msg.type === 'room_final' ? ' В· С„РёРЅР°Р»' : '');
+  metaEl.textContent = `стены: ${nW} · объекты: ${nO}` +
+    (msg.type === 'room_final' ? ' · финал' : '');
 }
 
 // --- WebSocket ---
@@ -445,11 +460,12 @@ function connect(codeToJoin) {
     try { ws.close(); } catch (_) {}
     ws = null;
   }
-  setStatus('РїРѕРґРєР»СЋС‡РµРЅРёРµвЂ¦');
+  setStatus('подключение…');
+  setPhoneBanner(false);
   ws = new WebSocket(wsUrl());
 
   ws.addEventListener('open', () => {
-    setStatus('РѕРЅР»Р°Р№РЅ', 'ok');
+    setStatus('онлайн', 'ok');
     if (codeToJoin) {
       ws.send(JSON.stringify({ type: 'join', role: 'web', code: codeToJoin }));
     } else {
@@ -472,25 +488,30 @@ function connect(codeToJoin) {
       case 'joined':
         sessionCode = msg.code;
         codeEl.textContent = sessionCode;
-        metaEl.textContent = msg.phoneConnected ? 'iPhone подключён' : 'Телефон НЕ подключён — IP 172.20.10.3:8787 + этот код';
+        metaEl.textContent = msg.phoneConnected
+          ? 'iPhone подключён'
+          : 'ожидание iPhone…';
+        setPhoneBanner(!!msg.phoneConnected);
         setDebug(t, 0);
         break;
       case 'phone_joined':
         // Clear prior room/mesh for a fresh phone scan; do not clear on unrelated events.
         clearRoom();
-        metaEl.textContent = 'iPhone РїРѕРґРєР»СЋС‡С‘РЅ';
-        setStatus('СЃРєР°РЅРёСЂРѕРІР°РЅРёРµ', 'ok');
+        metaEl.textContent = 'iPhone подключён';
+        setStatus('сканирование', 'ok');
+        setPhoneBanner(true);
         setDebug('phone_joined', 0);
         break;
       case 'phone_left':
-        metaEl.textContent = 'iPhone РѕС‚РєР»СЋС‡С‘РЅ';
-        setStatus('РѕРЅР»Р°Р№РЅ', 'ok');
+        metaEl.textContent = 'iPhone отключён';
+        setStatus('онлайн', 'ok');
+        setPhoneBanner(false);
         setDebug('phone_left', 0);
         break;
       case 'room_update':
       case 'room_final':
         applyRoomPayload(msg);
-        if (t === 'room_final') setStatus('СЃРєР°РЅ Р·Р°РІРµСЂС€С‘РЅ', 'ok');
+        if (t === 'room_final') setStatus('скан завершён', 'ok');
         setDebug(t, 0);
         break;
       case 'mesh_update': {
@@ -501,7 +522,7 @@ function connect(codeToJoin) {
         break;
       }
       case 'error':
-        setStatus(`РѕС€РёР±РєР°: ${msg.message}`, 'err');
+        setStatus(`ошибка: ${msg.message}`, 'err');
         setDebug('error', 0);
         break;
       default:
@@ -511,12 +532,12 @@ function connect(codeToJoin) {
   });
 
   ws.addEventListener('close', () => {
-    setStatus('РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёРµвЂ¦', 'warn');
+    setStatus('переподключение…', 'warn');
     setTimeout(() => connect(sessionCode), 1500);
   });
 
   ws.addEventListener('error', () => {
-    setStatus('РѕС€РёР±РєР° WS', 'err');
+    setStatus('ошибка WS', 'err');
   });
 }
 
@@ -524,7 +545,7 @@ btnNew.addEventListener('click', () => {
   stopDemo();
   clearRoom();
   sessionCode = null;
-  codeEl.textContent = 'В·В·В·В·';
+  codeEl.textContent = '····';
   connect(null);
 });
 
@@ -539,7 +560,7 @@ function stopDemo() {
     clearTimeout(demoTimer);
     demoTimer = null;
   }
-  btnDemo.textContent = 'Р”РµРјРѕ';
+  btnDemo.textContent = 'Демо';
 }
 
 function demoChunks() {
@@ -621,10 +642,10 @@ function runDemo() {
     return;
   }
   demoRunning = true;
-  btnDemo.textContent = 'РЎС‚РѕРї РґРµРјРѕ';
+  btnDemo.textContent = 'Стоп демо';
   clearRoom();
-  setStatus('РґРµРјРѕ', 'ok');
-  metaEl.textContent = 'СЃРёРјСѓР»СЏС†РёСЏ СЃРєР°РЅР°вЂ¦';
+  setStatus('демо', 'ok');
+  metaEl.textContent = 'симуляция скана…';
 
   const chunks = demoChunks();
   let i = 0;
@@ -633,7 +654,7 @@ function runDemo() {
     if (!demoRunning) return;
     if (i >= chunks.length) {
       stopDemo();
-      setStatus('РґРµРјРѕ Р·Р°РІРµСЂС€РµРЅРѕ', 'ok');
+      setStatus('демо завершено', 'ok');
       return;
     }
     applyRoomPayload(chunks[i]);
@@ -646,4 +667,3 @@ function runDemo() {
 btnDemo.addEventListener('click', runDemo);
 
 connect(null);
-

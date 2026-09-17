@@ -11,6 +11,7 @@ final class MeshScanModel: NSObject, ObservableObject {
     @Published var isScanning = false
     @Published var wsStatus: String = "нет связи"
     @Published var meshStats: String = ""
+    @Published var isJoined = false
 
     private let ws = WebSocketClient()
     private var session: ARSession?
@@ -34,9 +35,12 @@ final class MeshScanModel: NSObject, ObservableObject {
     }
 
     func connect(host: String, code: String) throws {
+        isJoined = false
         ws.onStatus = { [weak self] text in
             Task { @MainActor in
-                self?.wsStatus = text
+                guard let self else { return }
+                self.wsStatus = text
+                self.isJoined = self.ws.isJoined || text.contains("в сессии")
             }
         }
         try ws.connect(hostPort: host, sessionCode: code)
@@ -45,6 +49,7 @@ final class MeshScanModel: NSObject, ObservableObject {
     func disconnect() {
         stop()
         ws.disconnect()
+        isJoined = false
         wsStatus = "отключено"
     }
 
