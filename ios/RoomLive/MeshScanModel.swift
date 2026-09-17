@@ -4,6 +4,7 @@ import ARKit
 import CoreVideo
 import CoreGraphics
 import simd
+import UIKit
 
 /// Streams dense LiDAR scene-reconstruction meshes (vertices / faces / camera-sampled colors) over WebSocket.
 @MainActor
@@ -24,6 +25,16 @@ final class MeshScanModel: NSObject, ObservableObject {
     private let maxPayloadBytes = 600_000
     /// start() may race ahead of MeshARViewContainer.attach(session).
     private var pendingStart = false
+
+    /// Last good RGB (0…1) per vertex index, keyed by mesh-anchor UUID.
+    private var lastColorsByAnchor: [UUID: [SIMD3<Float>]] = [:]
+
+    /// Per-frame RGB cache (row-major RGB888, size = width*height*3).
+    private var rgbCache: [UInt8] = []
+    private var rgbWidth = 0
+    private var rgbHeight = 0
+    private var rgbFrameTimestamp: TimeInterval = -1
+    private var rgbIsVideoRange = false
 
     func attach(session: ARSession) {
         self.session = session
@@ -55,7 +66,6 @@ final class MeshScanModel: NSObject, ObservableObject {
 
     func start() {
         guard let session else {
-            // ARView not ready yet — queue until attach()
             pendingStart = true
             return
         }
@@ -68,7 +78,6 @@ final class MeshScanModel: NSObject, ObservableObject {
         }
 
         let config = ARWorldTrackingConfiguration()
-        // Prefer classified mesh when available; color comes from camera sampling.
         if supportsClassified {
             config.sceneReconstruction = .meshWithClassification
         } else {
@@ -81,6 +90,8 @@ final class MeshScanModel: NSObject, ObservableObject {
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isScanning = true
         faceStride = 1
+        lastColorsByAnchor.removeAll(keepingCapacity: true)
+        invalidateRGBCache()
         startSendTimer()
     }
 
@@ -90,6 +101,8 @@ final class MeshScanModel: NSObject, ObservableObject {
         sendTimer = nil
         session?.pause()
         isScanning = false
+        lastColorsByAnchor.removeAll()
+        invalidateRGBCache()
     }
 
     private func startSendTimer() {
@@ -110,29 +123,32 @@ final class MeshScanModel: NSObject, ObservableObject {
         guard now.timeIntervalSince(lastSend) >= minInterval * 0.9 else { return }
         lastSend = now
 
+        // Convert camera YCbCr → RGB once per tick for all vertex samples.
+        ensureRGBCache(from: frame)
+
         let meshAnchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
         guard !meshAnchors.isEmpty else {
             meshStats = "якорей: 0"
             return
         }
 
-        // Prefer fewer faces over silence: pack, and if oversize, bump stride and re-pack same tick.
         var sent = false
         for _ in 0..<6 {
             var chunks: [[String: Any]] = []
             var totalVerts = 0
             var totalFaces = 0
+            var coloredVerts = 0
 
             for (idx, anchor) in meshAnchors.enumerated() {
                 guard let packed = packAnchor(anchor, index: idx, frame: frame, faceStride: faceStride) else { continue }
                 totalVerts += packed.vertexCount
                 totalFaces += packed.faceCount
+                coloredVerts += packed.coloredCount
                 chunks.append(packed.dict)
             }
 
             guard !chunks.isEmpty else { return }
 
-            // Try full set, then progressively fewer chunks if still oversized.
             var attemptChunks = chunks
             while !attemptChunks.isEmpty {
                 let payload: [String: Any] = [
@@ -146,17 +162,16 @@ final class MeshScanModel: NSObject, ObservableObject {
 
                 if data.count <= maxPayloadBytes {
                     ws.sendJSON(payload)
-                    meshStats = "якорей: \(attemptChunks.count)/\(chunks.count) · verts \(totalVerts) · faces \(totalFaces) · stride \(faceStride) · \(data.count / 1024)KB"
+                    let pct = totalVerts > 0 ? (coloredVerts * 100) / totalVerts : 0
+                    meshStats = "якорей: \(attemptChunks.count)/\(chunks.count) · verts \(totalVerts) · color \(pct)% · stride \(faceStride) · \(data.count / 1024)KB"
                     sent = true
                     break
                 }
 
-                // Still too big with current stride — drop half the chunks same tick.
                 if attemptChunks.count > 1 {
                     attemptChunks = Array(attemptChunks.prefix(max(1, attemptChunks.count / 2)))
                     continue
                 }
-                // Single chunk still too big: bump stride and re-pack outer loop.
                 break
             }
 
@@ -167,7 +182,6 @@ final class MeshScanModel: NSObject, ObservableObject {
                 continue
             }
 
-            // Last resort: send whatever limited chunks we can (even if oversize-ish) — prefer attempt over silence.
             let limited = Array(chunks.prefix(1))
             let slim: [String: Any] = ["type": "mesh_update", "chunks": limited]
             ws.sendJSON(slim)
@@ -185,6 +199,7 @@ final class MeshScanModel: NSObject, ObservableObject {
         let dict: [String: Any]
         let vertexCount: Int
         let faceCount: Int
+        let coloredCount: Int
     }
 
     private func packAnchor(_ anchor: ARMeshAnchor, index: Int, frame: ARFrame, faceStride: Int) -> PackedMesh? {
@@ -218,18 +233,48 @@ final class MeshScanModel: NSObject, ObservableObject {
         vertices.reserveCapacity(sortedOld.count * 3)
         colors.reserveCapacity(sortedOld.count * 3)
 
+        var prev = lastColorsByAnchor[anchor.identifier] ?? []
+        // Grow prev to cover max old index we may sample (by remapped new length we store by newIdx).
+        var nextColors = [SIMD3<Float>](repeating: SIMD3(0.55, 0.55, 0.55), count: sortedOld.count)
+        if prev.count != sortedOld.count {
+            // Best-effort: keep what we can by old vertex index via previous packing size mismatch — soft reset.
+            prev = []
+        }
+
+        var coloredCount = 0
+
         for (newIdx, oldIdx) in sortedOld.enumerated() {
             oldToNew[oldIdx] = newIdx
             let local = vertex(at: oldIdx, geometry: geometry)
-            let world = transform * SIMD4<Float>(local.x, local.y, local.z, 1)
+            let world4 = transform * SIMD4<Float>(local.x, local.y, local.z, 1)
+            let world = SIMD3<Float>(world4.x, world4.y, world4.z)
             vertices.append(contentsOf: [
                 round3(Double(world.x)),
                 round3(Double(world.y)),
                 round3(Double(world.z)),
             ])
-            let rgb = sampleColor(worldPosition: SIMD3(world.x, world.y, world.z), frame: frame)
-            colors.append(contentsOf: [round3(max(0.25, rgb.0)), round3(max(0.25, rgb.1)), round3(max(0.25, rgb.2))])
+
+            if let rgb = sampleColorFromCache(worldPosition: world, frame: frame) {
+                nextColors[newIdx] = rgb
+                coloredCount += 1
+            } else if newIdx < prev.count {
+                // Keep last good color — do NOT paint uniform grey over the mesh.
+                nextColors[newIdx] = prev[newIdx]
+                coloredCount += 1
+            } else {
+                // Brand-new vertex with no sample yet: soft neutral (only once).
+                nextColors[newIdx] = SIMD3(0.52, 0.53, 0.54)
+            }
+
+            let c = nextColors[newIdx]
+            colors.append(contentsOf: [
+                round3(Double(c.x)),
+                round3(Double(c.y)),
+                round3(Double(c.z)),
+            ])
         }
+
+        lastColorsByAnchor[anchor.identifier] = nextColors
 
         var indices: [Int] = []
         indices.reserveCapacity(keptTris.count * 3)
@@ -244,7 +289,7 @@ final class MeshScanModel: NSObject, ObservableObject {
             "indices": indices,
             "colors": colors,
         ]
-        return PackedMesh(dict: dict, vertexCount: sortedOld.count, faceCount: keptTris.count)
+        return PackedMesh(dict: dict, vertexCount: sortedOld.count, faceCount: keptTris.count, coloredCount: coloredCount)
     }
 
     private func vertex(at index: Int, geometry: ARMeshGeometry) -> SIMD3<Float> {
@@ -267,49 +312,135 @@ final class MeshScanModel: NSObject, ObservableObject {
         }
     }
 
-    /// Project world vertex into camera image and sample RGB (photographed LiDAR look).
-    private func sampleColor(worldPosition: SIMD3<Float>, frame: ARFrame) -> (Double, Double, Double) {
-        let cam = frame.camera
+    // MARK: - Camera RGB cache + sampling
+
+    private func invalidateRGBCache() {
+        rgbCache.removeAll(keepingCapacity: true)
+        rgbWidth = 0
+        rgbHeight = 0
+        rgbFrameTimestamp = -1
+    }
+
+    /// Convert `capturedImage` YCbCr biplanar → RGB888 once per ARFrame.
+    private func ensureRGBCache(from frame: ARFrame) {
+        let ts = frame.timestamp
+        if ts == rgbFrameTimestamp, !rgbCache.isEmpty, rgbWidth > 0 { return }
+
         let image = frame.capturedImage
         let w = CVPixelBufferGetWidth(image)
         let h = CVPixelBufferGetHeight(image)
-        guard w > 0, h > 0 else { return (0.55, 0.55, 0.55) }
-
-        let viewport = CGSize(width: w, height: h)
-        let pt = cam.projectPoint(worldPosition, orientation: .landscapeRight, viewportSize: viewport)
-        let x = Int(pt.x.rounded())
-        let y = Int(pt.y.rounded())
-        guard x >= 0, y >= 0, x < w, y < h else {
-            return (0.45, 0.48, 0.5)
+        guard w > 0, h > 0 else {
+            invalidateRGBCache()
+            return
         }
+
+        let fmt = CVPixelBufferGetPixelFormatType(image)
+        let isFull = fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        let isVideo = fmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        guard isFull || isVideo else {
+            invalidateRGBCache()
+            return
+        }
+        rgbIsVideoRange = isVideo
 
         CVPixelBufferLockBaseAddress(image, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
 
-        let fmt = CVPixelBufferGetPixelFormatType(image)
-        guard fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            || fmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange else {
-            return (0.55, 0.55, 0.55)
+        guard let yBase = CVPixelBufferGetBaseAddressOfPlane(image, 0)?.assumingMemoryBound(to: UInt8.self),
+              let cbcrBase = CVPixelBufferGetBaseAddressOfPlane(image, 1)?.assumingMemoryBound(to: UInt8.self) else {
+            invalidateRGBCache()
+            return
         }
 
-        guard let yBase = CVPixelBufferGetBaseAddressOfPlane(image, 0),
-              let cbcrBase = CVPixelBufferGetBaseAddressOfPlane(image, 1) else {
-            return (0.55, 0.55, 0.55)
+        let yBPR = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        let cBPR = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
+
+        let need = w * h * 3
+        if rgbCache.count != need {
+            rgbCache = [UInt8](repeating: 0, count: need)
         }
 
-        let yBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
-        let cBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(image, 1)
-        let yVal = Double(yBase.advanced(by: y * yBytesPerRow + x).assumingMemoryBound(to: UInt8.self).pointee)
-        let cx = x / 2
-        let cy = y / 2
-        let cbcr = cbcrBase.advanced(by: cy * cBytesPerRow + cx * 2).assumingMemoryBound(to: UInt8.self)
-        let cb = Double(cbcr[0])
-        let cr = Double(cbcr[1])
+        // BT.601 YCbCr → RGB. VideoRange scales Y from 16…235; FullRange uses 0…255.
+        rgbCache.withUnsafeMutableBufferPointer { buf in
+            guard let out = buf.baseAddress else { return }
+            for y in 0..<h {
+                let yRow = yBase.advanced(by: y * yBPR)
+                let cRow = cbcrBase.advanced(by: (y / 2) * cBPR)
+                let outRow = out.advanced(by: y * w * 3)
+                for x in 0..<w {
+                    var Y = Double(yRow[x])
+                    if isVideo {
+                        Y = (Y - 16.0) * (255.0 / 219.0)
+                    }
+                    let cx = x / 2
+                    let Cb = Double(cRow[cx * 2]) - 128.0
+                    let Cr = Double(cRow[cx * 2 + 1]) - 128.0
 
-        let r = min(255, max(0, yVal + 1.402 * (cr - 128))) / 255.0
-        let g = min(255, max(0, yVal - 0.344136 * (cb - 128) - 0.714136 * (cr - 128))) / 255.0
-        let b = min(255, max(0, yVal + 1.772 * (cb - 128))) / 255.0
-        return (r, g, b)
+                    // Full-range style matrix on (possibly expanded) Y:
+                    var R = Y + 1.402 * Cr
+                    var G = Y - 0.344136 * Cb - 0.714136 * Cr
+                    var B = Y + 1.772 * Cb
+                    R = min(255, max(0, R))
+                    G = min(255, max(0, G))
+                    B = min(255, max(0, B))
+
+                    let o = x * 3
+                    outRow[o] = UInt8(R)
+                    outRow[o + 1] = UInt8(G)
+                    outRow[o + 2] = UInt8(B)
+                }
+            }
+        }
+
+        rgbWidth = w
+        rgbHeight = h
+        rgbFrameTimestamp = ts
+    }
+
+    /// Project world point into camera buffer and read RGB. Returns nil if outside / behind / no cache.
+    private func sampleColorFromCache(worldPosition: SIMD3<Float>, frame: ARFrame) -> SIMD3<Float>? {
+        guard rgbWidth > 0, rgbHeight > 0, !rgbCache.isEmpty else { return nil }
+
+        let cam = frame.camera
+        // Reject points behind the camera (ARKit camera looks down −Z).
+        let inv = cam.transform.inverse
+        let camLocal = inv * SIMD4<Float>(worldPosition.x, worldPosition.y, worldPosition.z, 1)
+        if camLocal.z >= 0 { return nil }
+
+        let w = rgbWidth
+        let h = rgbHeight
+        let viewport = CGSize(width: w, height: h)
+
+        // capturedImage is sensor/landscape oriented; landscapeRight + buffer size is the usual match.
+        var pt = cam.projectPoint(worldPosition, orientation: .landscapeRight, viewportSize: viewport)
+        var x = Int(pt.x.rounded())
+        var y = Int(pt.y.rounded())
+
+        if x < 0 || y < 0 || x >= w || y >= h {
+            // Retry portrait orientations in case interface/buffer mapping differs.
+            for orient: UIInterfaceOrientation in [.portrait, .landscapeLeft, .portraitUpsideDown] {
+                pt = cam.projectPoint(worldPosition, orientation: orient, viewportSize: viewport)
+                x = Int(pt.x.rounded())
+                y = Int(pt.y.rounded())
+                if x >= 0, y >= 0, x < w, y < h { break }
+            }
+        }
+
+        // Small 3×3 search if exactly on the edge / slight mis-project.
+        if x < 0 || y < 0 || x >= w || y >= h {
+            return nil
+        }
+
+        // Clamp inward by 1px to avoid plane-edge artifacts.
+        x = min(w - 1, max(0, x))
+        y = min(h - 1, max(0, y))
+
+        let base = (y * w + x) * 3
+        guard base + 2 < rgbCache.count else { return nil }
+        let r = Float(rgbCache[base]) / 255.0
+        let g = Float(rgbCache[base + 1]) / 255.0
+        let b = Float(rgbCache[base + 2]) / 255.0
+        return SIMD3(r, g, b)
     }
 
     private func round3(_ v: Double) -> Double {

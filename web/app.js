@@ -99,7 +99,7 @@ function upsertMeshChunk(chunk) {
   let root = meshChunkMap.get(id);
   if (!root) {
     const geo = new THREE.BufferGeometry();
-    // Unlit + bright fallback so dark LiDAR samples stay visible on black bg.
+    // White base * vertexColors — do NOT set a grey material color (it flattens).
     const mat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       vertexColors: true,
@@ -111,6 +111,10 @@ function upsertMeshChunk(chunk) {
     root.receiveShadow = false;
     meshGroup.add(root);
     meshChunkMap.set(id, root);
+  } else if (root.material) {
+    root.material.vertexColors = true;
+    root.material.color.set(0xffffff);
+    root.material.needsUpdate = true;
   }
 
   const geo = root.geometry;
@@ -120,18 +124,39 @@ function upsertMeshChunk(chunk) {
   const cols = new Float32Array(positions.length);
   if (Array.isArray(colors) && colors.length >= positions.length) {
     for (let i = 0; i < positions.length; i += 3) {
-      // Lift dark camera samples so mesh is never near-black on dark background.
-      cols[i] = Math.min(1, Math.max(0.22, Number(colors[i]) || 0) * 1.25);
-      cols[i + 1] = Math.min(1, Math.max(0.22, Number(colors[i + 1]) || 0) * 1.25);
-      cols[i + 2] = Math.min(1, Math.max(0.22, Number(colors[i + 2]) || 0) * 1.25);
+      // Brighten slightly but preserve hue (no per-channel floor → grey crush).
+      let r = Number(colors[i]) || 0;
+      let g = Number(colors[i + 1]) || 0;
+      let b = Number(colors[i + 2]) || 0;
+      r *= 1.18; g *= 1.18; b *= 1.18;
+      const maxC = Math.max(r, g, b, 1e-6);
+      if (maxC > 1) { r /= maxC; g /= maxC; b /= maxC; }
+      cols[i] = Math.min(1, Math.max(0, r));
+      cols[i + 1] = Math.min(1, Math.max(0, g));
+      cols[i + 2] = Math.min(1, Math.max(0, b));
     }
   } else {
     for (let i = 0; i < cols.length; i += 3) {
-      cols[i] = 0.35; cols[i + 1] = 0.9; cols[i + 2] = 0.7; // mint fallback
+      cols[i] = 0.35; cols[i + 1] = 0.9; cols[i + 2] = 0.7; // mint = missing colors array
     }
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   geo.attributes.color.needsUpdate = true;
+
+  // Detect near-zero variance (all ~grey) — camera sampling failed.
+  let sum = 0, sum2 = 0, n = cols.length / 3;
+  let minL = 1, maxL = 0;
+  for (let i = 0; i < cols.length; i += 3) {
+    const lum = 0.2126 * cols[i] + 0.7152 * cols[i + 1] + 0.0722 * cols[i + 2];
+    sum += lum; sum2 += lum * lum;
+    if (lum < minL) minL = lum;
+    if (lum > maxL) maxL = lum;
+  }
+  const mean = sum / Math.max(1, n);
+  const variance = sum2 / Math.max(1, n) - mean * mean;
+  root.userData.colorVariance = variance;
+  root.userData.colorRange = maxL - minL;
+  root.userData.flatGrey = variance < 0.0008 && (maxL - minL) < 0.06;
 
   if (Array.isArray(indices) && indices.length >= 3) {
     const maxIndex = positions.length / 3 - 1;
@@ -176,8 +201,16 @@ function applyMeshPayload(msg) {
   const sampleTxt = sample && sample.length >= 3
     ? ` · p0=(${Number(sample[0]).toFixed(2)},${Number(sample[1]).toFixed(2)},${Number(sample[2]).toFixed(2)})`
     : '';
-  metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}${sampleTxt}`;
-  setStatus(`LiDAR live · in=${chunks.length} ok=${applied} · ${nV} verts`, 'ok');
+  const flat = [...meshChunkMap.values()].filter((m) => m.userData.flatGrey).length;
+  const colorWarn = flat > 0 && flat >= Math.ceil(meshChunkMap.size * 0.6);
+  metaEl.textContent = colorWarn
+    ? `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV} · цвет камеры не пришёл${sampleTxt}`
+    : `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}${sampleTxt}`;
+  if (colorWarn) {
+    setStatus('цвет камеры не пришёл', 'warn');
+  } else {
+    setStatus(`LiDAR live · in=${chunks.length} ok=${applied} · ${nV} verts`, 'ok');
+  }
   setDebug('mesh_update', chunks.length);
   // Fit aggressively so first packets are on screen.
   const now = performance.now();
