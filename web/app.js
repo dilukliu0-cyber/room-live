@@ -173,8 +173,8 @@ function applyMeshPayload(msg) {
     const attr = m.geometry?.getAttribute('position');
     return acc + (attr ? attr.count : 0);
   }, 0);
-  metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}`;
-  setStatus(`LiDAR live · ${meshChunkMap.size} chunks · ${nV} verts`, 'ok');
+  metaEl.textContent = `LiDAR mesh В· С‡Р°РЅРєРѕРІ: ${meshChunkMap.size} В· РІРµСЂС€РёРЅ: ${nV}`;
+  setStatus(`LiDAR live В· ${meshChunkMap.size} chunks В· ${nV} verts`, 'ok');
   const now = performance.now();
   // Fit on every update for the first 15, then ~1s.
   if (meshUpdateCount <= 15 || now - lastFitAt > 1000) {
@@ -208,8 +208,8 @@ function setStatus(text, kind = '') {
 const debugEl = $('debugLine');
 function setDebug(type, chunks) {
   if (!debugEl) return;
-  const n = typeof chunks === 'number' ? chunks : '—';
-  debugEl.textContent = `dbg: last=${type || '—'} · chunks=${n} · map=${meshChunkMap.size}`;
+  const n = typeof chunks === 'number' ? chunks : 'вЂ”';
+  debugEl.textContent = `dbg: last=${type || 'вЂ”'} В· chunks=${n} В· map=${meshChunkMap.size}`;
 }
 
 function resize() {
@@ -246,7 +246,7 @@ function clearRoom() {
   }
   entityMap.clear();
   clearMeshes();
-  metaEl.textContent = 'сцена очищена';
+  metaEl.textContent = 'СЃС†РµРЅР° РѕС‡РёС‰РµРЅР°';
 }
 
 function makeLabel(text) {
@@ -353,7 +353,7 @@ function upsertOpening(item, kind) {
     root = new THREE.Group();
     root.add(mesh);
     root.userData.mesh = mesh;
-    const label = makeLabel(kind === 'window' ? 'окно' : 'дверь');
+    const label = makeLabel(kind === 'window' ? 'РѕРєРЅРѕ' : 'РґРІРµСЂСЊ');
     label.position.y = 0.7;
     root.add(label);
     roomGroup.add(root);
@@ -430,8 +430,8 @@ function applyRoomPayload(msg) {
 
   const nW = walls.length;
   const nO = objects.length + doors.length + windows.length;
-  metaEl.textContent = `стены: ${nW} · объекты: ${nO}` +
-    (msg.type === 'room_final' ? ' · финал' : '');
+  metaEl.textContent = `СЃС‚РµРЅС‹: ${nW} В· РѕР±СЉРµРєС‚С‹: ${nO}` +
+    (msg.type === 'room_final' ? ' В· С„РёРЅР°Р»' : '');
 }
 
 // --- WebSocket ---
@@ -445,11 +445,11 @@ function connect(codeToJoin) {
     try { ws.close(); } catch (_) {}
     ws = null;
   }
-  setStatus('подключение…');
+  setStatus('РїРѕРґРєР»СЋС‡РµРЅРёРµвЂ¦');
   ws = new WebSocket(wsUrl());
 
   ws.addEventListener('open', () => {
-    setStatus('онлайн', 'ok');
+    setStatus('РѕРЅР»Р°Р№РЅ', 'ok');
     if (codeToJoin) {
       ws.send(JSON.stringify({ type: 'join', role: 'web', code: codeToJoin }));
     } else {
@@ -472,27 +472,25 @@ function connect(codeToJoin) {
       case 'joined':
         sessionCode = msg.code;
         codeEl.textContent = sessionCode;
-        metaEl.textContent = msg.phoneConnected
-          ? 'iPhone подключён'
-          : 'ожидание iPhone…';
+        metaEl.textContent = msg.phoneConnected ? 'iPhone подключён' : 'Телефон НЕ подключён — IP 172.20.10.3:8787 + этот код';
         setDebug(t, 0);
         break;
       case 'phone_joined':
         // Clear prior room/mesh for a fresh phone scan; do not clear on unrelated events.
         clearRoom();
-        metaEl.textContent = 'iPhone подключён';
-        setStatus('сканирование', 'ok');
+        metaEl.textContent = 'iPhone РїРѕРґРєР»СЋС‡С‘РЅ';
+        setStatus('СЃРєР°РЅРёСЂРѕРІР°РЅРёРµ', 'ok');
         setDebug('phone_joined', 0);
         break;
       case 'phone_left':
-        metaEl.textContent = 'iPhone отключён';
-        setStatus('онлайн', 'ok');
+        metaEl.textContent = 'iPhone РѕС‚РєР»СЋС‡С‘РЅ';
+        setStatus('РѕРЅР»Р°Р№РЅ', 'ok');
         setDebug('phone_left', 0);
         break;
       case 'room_update':
       case 'room_final':
         applyRoomPayload(msg);
-        if (t === 'room_final') setStatus('скан завершён', 'ok');
+        if (t === 'room_final') setStatus('СЃРєР°РЅ Р·Р°РІРµСЂС€С‘РЅ', 'ok');
         setDebug(t, 0);
         break;
       case 'mesh_update': {
@@ -503,7 +501,7 @@ function connect(codeToJoin) {
         break;
       }
       case 'error':
-        setStatus(`ошибка: ${msg.message}`, 'err');
+        setStatus(`РѕС€РёР±РєР°: ${msg.message}`, 'err');
         setDebug('error', 0);
         break;
       default:
@@ -513,12 +511,12 @@ function connect(codeToJoin) {
   });
 
   ws.addEventListener('close', () => {
-    setStatus('переподключение…', 'warn');
+    setStatus('РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёРµвЂ¦', 'warn');
     setTimeout(() => connect(sessionCode), 1500);
   });
 
   ws.addEventListener('error', () => {
-    setStatus('ошибка WS', 'err');
+    setStatus('РѕС€РёР±РєР° WS', 'err');
   });
 }
 
@@ -526,7 +524,7 @@ btnNew.addEventListener('click', () => {
   stopDemo();
   clearRoom();
   sessionCode = null;
-  codeEl.textContent = '····';
+  codeEl.textContent = 'В·В·В·В·';
   connect(null);
 });
 
@@ -541,7 +539,7 @@ function stopDemo() {
     clearTimeout(demoTimer);
     demoTimer = null;
   }
-  btnDemo.textContent = 'Демо';
+  btnDemo.textContent = 'Р”РµРјРѕ';
 }
 
 function demoChunks() {
@@ -623,10 +621,10 @@ function runDemo() {
     return;
   }
   demoRunning = true;
-  btnDemo.textContent = 'Стоп демо';
+  btnDemo.textContent = 'РЎС‚РѕРї РґРµРјРѕ';
   clearRoom();
-  setStatus('демо', 'ok');
-  metaEl.textContent = 'симуляция скана…';
+  setStatus('РґРµРјРѕ', 'ok');
+  metaEl.textContent = 'СЃРёРјСѓР»СЏС†РёСЏ СЃРєР°РЅР°вЂ¦';
 
   const chunks = demoChunks();
   let i = 0;
@@ -635,7 +633,7 @@ function runDemo() {
     if (!demoRunning) return;
     if (i >= chunks.length) {
       stopDemo();
-      setStatus('демо завершено', 'ok');
+      setStatus('РґРµРјРѕ Р·Р°РІРµСЂС€РµРЅРѕ', 'ok');
       return;
     }
     applyRoomPayload(chunks[i]);
@@ -648,3 +646,4 @@ function runDemo() {
 btnDemo.addEventListener('click', runDemo);
 
 connect(null);
+
