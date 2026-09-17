@@ -1,0 +1,62 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/build-ipa.yml'
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version && xcodebuild -list -project ios/RoomLive.xcodeproj
+
+      - name: Build (unsigned device .app)
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild \
+            -project RoomLive.xcodeproj \
+            -scheme RoomLive \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: Package IPA
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          APP=$(find build/DerivedData/Build/Products -name 'RoomLive.app' -type d | head -n 1)
+          echo "Found app: $APP"
+          test -n "$APP"
+          rm -rf build/Payload build/RoomLive.ipa
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build
+          zip -qr RoomLive-unsigned.ipa Payload
+          ls -lh RoomLive-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoomLive-unsigned-ipa
+          path: ios/build/RoomLive-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
