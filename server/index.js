@@ -172,18 +172,17 @@ wss.on('connection', (ws) => {
         return;
       }
       const { session } = getOrCreateSession(meta.code);
-      // Prefer re-broadcasting parsed chunks with a server ts (still large-OK).
-      const payload = {
-        type: 'mesh_update',
-        chunks: Array.isArray(msg.chunks) ? msg.chunks : [],
-        ts: Date.now(),
-      };
-      broadcastToWebs(session, payload);
+      const chunkCount = Array.isArray(msg.chunks) ? msg.chunks.length : 0;
+      // Forward raw phone JSON to webs — avoids double JSON.stringify memory blow.
+      for (const client of session.webs) {
+        if (client.readyState === 1) client.send(rawText);
+      }
+      console.log(`[room-live] mesh_update relay chunks=${chunkCount} viewers=${session.webs.size} code=${meta.code}`);
       send(ws, {
         type: 'ack',
         of: type,
         viewers: session.webs.size,
-        chunks: payload.chunks.length,
+        chunks: chunkCount,
       });
       return;
     }

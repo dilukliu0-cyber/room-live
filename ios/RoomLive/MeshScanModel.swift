@@ -195,7 +195,7 @@ final class MeshScanModel: NSObject, ObservableObject {
         }
 
         let dict: [String: Any] = [
-            "id": "mesh-\(index)",
+            "id": anchor.identifier.uuidString,
             "vertices": vertices,
             "indices": indices,
             "colors": colors,
