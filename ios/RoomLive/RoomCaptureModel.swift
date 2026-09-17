@@ -78,7 +78,7 @@ final class RoomCaptureModel: NSObject, ObservableObject {
             encodeObject(obj, id: "obj-\(idx)")
         }
 
-        var payload: [String: Any] = [
+        let payload: [String: Any] = [
             "type": type,
             "walls": walls,
             "objects": objects,

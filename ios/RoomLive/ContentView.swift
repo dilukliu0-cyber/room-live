@@ -13,7 +13,7 @@ struct ContentView: View {
                     TextField("192.168.x.x:8787", text: $host)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .keyboardType(.ASCIICapable)
+                        .keyboardType(.asciiCapable)
                     TextField("Код сессии (4 символа)", text: $code)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
