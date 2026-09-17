@@ -86,6 +86,7 @@ wss.on('connection', (ws) => {
     }
 
     const type = msg.type;
+    const byteLen = Buffer.byteLength(rawText, 'utf8');
 
     if (type === 'create_session') {
       const code = generateCode();
@@ -93,6 +94,7 @@ wss.on('connection', (ws) => {
       meta.role = 'web';
       meta.code = key;
       session.webs.add(ws);
+      console.log(`[room-live] create_session code=${key}`);
       send(ws, { type: 'session_created', code: key, role: 'web' });
       return;
     }
@@ -106,6 +108,7 @@ wss.on('connection', (ws) => {
       }
 
       if (!code || code.length !== 4) {
+        console.log(`[room-live] error invalid_code got=${JSON.stringify(msg.code)}`);
         send(ws, { type: 'error', message: 'invalid_code' });
         return;
       }
@@ -124,6 +127,7 @@ wss.on('connection', (ws) => {
           try { session.phone.close(); } catch (_) {}
         }
         session.phone = ws;
+        console.log(`[room-live] join phone code=${key} viewers=${session.webs.size}`);
         send(ws, {
           type: 'joined',
           code: key,
@@ -133,6 +137,7 @@ wss.on('connection', (ws) => {
         broadcastToWebs(session, { type: 'phone_joined', code: key });
       } else {
         session.webs.add(ws);
+        console.log(`[room-live] join web code=${key} phone=${!!(session.phone && session.phone.readyState === 1)}`);
         send(ws, {
           type: 'joined',
           code: key,
@@ -148,6 +153,7 @@ wss.on('connection', (ws) => {
 
     if (type === 'room_update' || type === 'room_final') {
       if (meta.role !== 'phone' || !meta.code) {
+        console.log(`[room-live] error not_phone on ${type} role=${meta.role}`);
         send(ws, { type: 'error', message: 'not_phone' });
         return;
       }
@@ -161,6 +167,7 @@ wss.on('connection', (ws) => {
         windows: Array.isArray(msg.windows) ? msg.windows : undefined,
         ts: Date.now(),
       };
+      console.log(`[room-live] ${type} walls=${payload.walls.length} viewers=${session.webs.size} code=${meta.code} bytes=${byteLen}`);
       broadcastToWebs(session, payload);
       send(ws, { type: 'ack', of: type, viewers: session.webs.size });
       return;
@@ -168,20 +175,26 @@ wss.on('connection', (ws) => {
 
     if (type === 'mesh_update') {
       if (meta.role !== 'phone' || !meta.code) {
+        console.log(`[room-live] error not_phone on mesh_update role=${meta.role}`);
         send(ws, { type: 'error', message: 'not_phone' });
         return;
       }
       const { session } = getOrCreateSession(meta.code);
       const chunkCount = Array.isArray(msg.chunks) ? msg.chunks.length : 0;
+      const viewers = session.webs.size;
       // Forward raw phone JSON to webs — avoids double JSON.stringify memory blow.
       for (const client of session.webs) {
         if (client.readyState === 1) client.send(rawText);
       }
-      console.log(`[room-live] mesh_update relay chunks=${chunkCount} viewers=${session.webs.size} code=${meta.code}`);
+      if (viewers === 0) {
+        console.warn(`[room-live] WARN mesh_update viewers=0 chunks=${chunkCount} bytes=${byteLen} code=${meta.code}`);
+      } else {
+        console.log(`[room-live] mesh_update relay chunks=${chunkCount} viewers=${viewers} bytes=${byteLen} code=${meta.code}`);
+      }
       send(ws, {
         type: 'ack',
         of: type,
-        viewers: session.webs.size,
+        viewers,
         chunks: chunkCount,
       });
       return;
@@ -192,6 +205,7 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    console.log(`[room-live] error unknown_type got=${type} role=${meta.role} bytes=${byteLen}`);
     send(ws, { type: 'error', message: 'unknown_type', got: type });
   });
 

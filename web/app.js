@@ -101,7 +101,7 @@ function upsertMeshChunk(chunk) {
     });
     root = new THREE.Mesh(geo, mat);
     root.castShadow = false;
-    root.receiveShadow = true;
+    root.receiveShadow = false;
     meshGroup.add(root);
     meshChunkMap.set(id, root);
   }
@@ -174,11 +174,10 @@ function applyMeshPayload(msg) {
     return acc + (attr ? attr.count : 0);
   }, 0);
   metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}`;
+  setStatus(`LiDAR live · ${meshChunkMap.size} chunks · ${nV} verts`, 'ok');
   const now = performance.now();
-  // First update: fit immediately; then first few aggressively; then ~1.2s.
-  const isFirst = meshUpdateCount <= 1;
-  const fitEvery = isFirst ? 0 : (meshUpdateCount < 8 ? 400 : 1200);
-  if (isFirst || now - lastFitAt > fitEvery) {
+  // Fit on every update for the first 15, then ~1s.
+  if (meshUpdateCount <= 15 || now - lastFitAt > 1000) {
     lastFitAt = now;
     fitCameraToMeshes();
   }
@@ -204,6 +203,13 @@ function fitCameraToMeshes() {
 function setStatus(text, kind = '') {
   statusEl.textContent = text;
   statusEl.className = 'status' + (kind ? ` ${kind}` : '');
+}
+
+const debugEl = $('debugLine');
+function setDebug(type, chunks) {
+  if (!debugEl) return;
+  const n = typeof chunks === 'number' ? chunks : '—';
+  debugEl.textContent = `dbg: last=${type || '—'} · chunks=${n} · map=${meshChunkMap.size}`;
 }
 
 function resize() {
@@ -455,39 +461,53 @@ function connect(codeToJoin) {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
 
-    switch (msg.type) {
+    const t = msg.type;
+    switch (t) {
+      case 'hello':
+        setDebug('hello', 0);
+        break;
       case 'session_created':
+      case 'session':
+      case 'created':
       case 'joined':
         sessionCode = msg.code;
         codeEl.textContent = sessionCode;
         metaEl.textContent = msg.phoneConnected
           ? 'iPhone подключён'
           : 'ожидание iPhone…';
+        setDebug(t, 0);
         break;
       case 'phone_joined':
+        // Clear prior room/mesh for a fresh phone scan; do not clear on unrelated events.
         clearRoom();
         metaEl.textContent = 'iPhone подключён';
         setStatus('сканирование', 'ok');
+        setDebug('phone_joined', 0);
         break;
       case 'phone_left':
         metaEl.textContent = 'iPhone отключён';
         setStatus('онлайн', 'ok');
+        setDebug('phone_left', 0);
         break;
       case 'room_update':
       case 'room_final':
         applyRoomPayload(msg);
-        if (msg.type === 'room_final') setStatus('скан завершён', 'ok');
+        if (t === 'room_final') setStatus('скан завершён', 'ok');
+        setDebug(t, 0);
         break;
-      case 'mesh_update':
-        meshUpdateCount += 1;
+      case 'mesh_update': {
+        const nChunks = Array.isArray(msg.chunks) ? msg.chunks.length : 0;
         applyMeshPayload(msg);
-        setStatus(`LiDAR live · ${meshChunkMap.size} chunks · #${meshUpdateCount}`, 'ok');
-        console.log('[room-live] mesh_update', (msg.chunks||[]).length, 'chunks');
+        setDebug('mesh_update', nChunks);
+        console.log('[room-live] mesh_update', nChunks, 'chunks');
         break;
+      }
       case 'error':
         setStatus(`ошибка: ${msg.message}`, 'err');
+        setDebug('error', 0);
         break;
       default:
+        setDebug(t || '?', 0);
         break;
     }
   });
