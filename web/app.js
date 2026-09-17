@@ -64,6 +64,7 @@ const meshChunkMap = new Map();
 const meshGroup = new THREE.Group();
 scene.add(meshGroup);
 let lastFitAt = 0;
+let meshUpdateCount = 0;
 
 function clearMeshes() {
   for (const mesh of meshChunkMap.values()) {
@@ -71,6 +72,14 @@ function clearMeshes() {
     disposeObject(mesh);
   }
   meshChunkMap.clear();
+  meshUpdateCount = 0;
+  // Restore default fog when mesh cleared
+  if (!scene.fog) {
+    scene.fog = new THREE.Fog(0x050706, 18, 45);
+  } else {
+    scene.fog.near = 18;
+    scene.fog.far = 45;
+  }
 }
 
 function upsertMeshChunk(chunk) {
@@ -101,7 +110,18 @@ function upsertMeshChunk(chunk) {
   }
 
   const geo = root.geometry;
+  // Dispose previous GPU buffers so setAttribute does not leave stale data.
+  const prevPos = geo.getAttribute('position');
+  const prevCol = geo.getAttribute('color');
+  const prevIdx = geo.getIndex();
+  if (prevPos) geo.deleteAttribute('position');
+  if (prevCol) geo.deleteAttribute('color');
+  if (prevIdx) geo.setIndex(null);
+  if (prevPos && prevPos.array !== positions) prevPos.array = null;
+  if (prevCol) prevCol.array = null;
+
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.attributes.position.needsUpdate = true;
 
   if (Array.isArray(colors) && colors.length >= positions.length) {
     const cols = new Float32Array(colors.length);
@@ -116,6 +136,7 @@ function upsertMeshChunk(chunk) {
     }
     geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   }
+  geo.attributes.color.needsUpdate = true;
 
   if (Array.isArray(indices) && indices.length >= 3) {
     const maxIndex = positions.length / 3 - 1;
@@ -128,6 +149,7 @@ function upsertMeshChunk(chunk) {
     if (safe.length >= 3) {
       const IndexArray = maxIndex > 65535 ? Uint32Array : Uint16Array;
       geo.setIndex(new IndexArray(safe));
+      if (geo.index) geo.index.needsUpdate = true;
     } else {
       geo.setIndex(null);
     }
@@ -136,19 +158,30 @@ function upsertMeshChunk(chunk) {
   }
 
   geo.computeVertexNormals();
+  geo.computeBoundingBox();
   geo.computeBoundingSphere();
 }
 
 function applyMeshPayload(msg) {
   const chunks = msg.chunks || [];
   for (const ch of chunks) upsertMeshChunk(ch);
+  meshUpdateCount += 1;
+
+  // Fog can hide mesh; disable while LiDAR is present.
+  if (meshChunkMap.size > 0 && scene.fog) {
+    scene.fog = null;
+  }
+
   const nV = [...meshChunkMap.values()].reduce((acc, m) => {
     const attr = m.geometry?.getAttribute('position');
     return acc + (attr ? attr.count : 0);
   }, 0);
   metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}`;
   const now = performance.now();
-  if (now - lastFitAt > 2500) {
+  // First update: fit immediately; then first few aggressively; then ~1.2s.
+  const isFirst = meshUpdateCount <= 1;
+  const fitEvery = isFirst ? 0 : (meshUpdateCount < 8 ? 400 : 1200);
+  if (isFirst || now - lastFitAt > fitEvery) {
     lastFitAt = now;
     fitCameraToMeshes();
   }
@@ -449,8 +482,9 @@ function connect(codeToJoin) {
         if (msg.type === 'room_final') setStatus('скан завершён', 'ok');
         break;
       case 'mesh_update':
+        meshUpdateCount += 1;
         applyMeshPayload(msg);
-        setStatus('LiDAR mesh', 'ok');
+        setStatus(`LiDAR live · ${meshChunkMap.size} chunks`, 'ok');
         break;
       case 'error':
         setStatus(`ошибка: ${msg.message}`, 'err');

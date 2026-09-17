@@ -16,11 +16,14 @@ final class WebSocketClient: NSObject {
     private var task: URLSessionWebSocketTask?
     private var session: URLSession?
     private var sessionCode: String = ""
+    /// True after a successful join send once the socket is open.
+    private var didJoin = false
     var onStatus: ((String) -> Void)?
 
     func connect(hostPort: String, sessionCode: String) throws {
         disconnect()
         self.sessionCode = sessionCode.uppercased()
+        self.didJoin = false
 
         var raw = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("http://") { raw = String(raw.dropFirst(7)) }
@@ -41,7 +44,8 @@ final class WebSocketClient: NSObject {
         onStatus?("подключение…")
         task.resume()
         listen()
-        join()
+        // Do NOT join here — URLSessionWebSocketTask may drop/err sends before open.
+        // join() runs from didOpenWithProtocol.
     }
 
     func disconnect() {
@@ -49,6 +53,7 @@ final class WebSocketClient: NSObject {
         task = nil
         session?.invalidateAndCancel()
         session = nil
+        didJoin = false
     }
 
     func sendJSON(_ object: [String: Any]) {
@@ -69,11 +74,13 @@ final class WebSocketClient: NSObject {
     }
 
     private func join() {
+        guard !sessionCode.isEmpty else { return }
         sendJSON([
             "type": "join",
             "role": "phone",
             "code": sessionCode,
         ])
+        didJoin = true
         onStatus?("код \(sessionCode)")
     }
 
@@ -89,6 +96,9 @@ final class WebSocketClient: NSObject {
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let type = json["type"] as? String {
                     switch type {
+                    case "hello":
+                        // Server hello can arrive before join; join is gated on didOpen.
+                        break
                     case "joined":
                         self.onStatus?("в сессии \(self.sessionCode)")
                     case "ack":
@@ -98,6 +108,10 @@ final class WebSocketClient: NSObject {
                     case "error":
                         let m = json["message"] as? String ?? "error"
                         self.onStatus?("ошибка: \(m)")
+                        // If join was rejected before we were open, retry once socket is joined.
+                        if !self.didJoin, m == "unknown_type" || m == "invalid_code" {
+                            // leave for didOpen / manual reconnect
+                        }
                     default:
                         break
                     }
@@ -111,9 +125,13 @@ final class WebSocketClient: NSObject {
 extension WebSocketClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         onStatus?("WS открыт")
+        if !didJoin {
+            join()
+        }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        didJoin = false
         onStatus?("WS закрыт")
     }
 }
