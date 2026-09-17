@@ -8,10 +8,12 @@ const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT) || 8787;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+/** Allow dense LiDAR mesh JSON (~1–2 MB per tick). */
+const MAX_WS_PAYLOAD = 8 * 1024 * 1024;
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '8mb' }));
 
 const webRoot = path.join(__dirname, '..', 'web');
 app.use(express.static(webRoot));
@@ -21,7 +23,7 @@ app.get('/health', (_req, res) => {
 });
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: MAX_WS_PAYLOAD });
 
 /** @type {Map<string, { phone: import('ws').WebSocket | null, webs: Set<import('ws').WebSocket> }>} */
 const sessions = new Map();
@@ -74,8 +76,10 @@ wss.on('connection', (ws) => {
 
   ws.on('message', (data) => {
     let msg;
+    let rawText;
     try {
-      msg = JSON.parse(String(data));
+      rawText = typeof data === 'string' ? data : Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
+      msg = JSON.parse(rawText);
     } catch {
       send(ws, { type: 'error', message: 'invalid_json' });
       return;
@@ -106,7 +110,6 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      // Leave previous session if any
       if (meta.code) {
         leaveCurrent();
       }
@@ -163,6 +166,28 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    if (type === 'mesh_update') {
+      if (meta.role !== 'phone' || !meta.code) {
+        send(ws, { type: 'error', message: 'not_phone' });
+        return;
+      }
+      const { session } = getOrCreateSession(meta.code);
+      // Prefer re-broadcasting parsed chunks with a server ts (still large-OK).
+      const payload = {
+        type: 'mesh_update',
+        chunks: Array.isArray(msg.chunks) ? msg.chunks : [],
+        ts: Date.now(),
+      };
+      broadcastToWebs(session, payload);
+      send(ws, {
+        type: 'ack',
+        of: type,
+        viewers: session.webs.size,
+        chunks: payload.chunks.length,
+      });
+      return;
+    }
+
     if (type === 'ping') {
       send(ws, { type: 'pong', t: Date.now() });
       return;
@@ -205,5 +230,5 @@ wss.on('connection', (ws) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[room-live] http://0.0.0.0:${PORT}`);
   console.log(`[room-live] serving ${webRoot}`);
-  console.log(`[room-live] WebSocket on same port`);
+  console.log(`[room-live] WebSocket on same port (maxPayload ${MAX_WS_PAYLOAD})`);
 });

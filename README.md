@@ -1,28 +1,32 @@
 # Room Live
 
-**Живое сканирование комнаты:** iPhone (RoomPlan) → WebSocket → сайт с Three.js.
+**Живое сканирование комнаты:** iPhone (LiDAR) → WebSocket → сайт с Three.js.
 
-Сайт показывает 3D-комнату в реальном времени. Приложение на iPhone стримит стены, двери, окна и мебель.
+Два режима на телефоне:
+1. **LiDAR mesh** (основной) — плотный цветной меш как «сфотографированный» скан, собирается на сайте кусок за куском (`mesh_update`).
+2. **RoomPlan** — схематические стены / двери / окна / мебель (`room_update`).
+
+Нужен **iPhone с LiDAR** (Pro / Pro Max или iPad Pro с LiDAR).
 
 ---
 
 ## Быстрый старт
 
 ```bash
-cd /workspace/room-live/server
+cd server
 npm install
 npm start
 ```
 
-Откройте в браузере: **http://localhost:8787** (или `http://<LAN-IP>:8787` с телефона/других устройств).
+Откройте в браузере: **http://localhost:8787** (или `http://<LAN-IP>:8787`).
 
-Нажмите **«Демо»** — комната соберётся по частям без iPhone.
+Нажмите **«Демо»** — схематичная комната без iPhone.
 
-Порт по умолчанию: **8787** (`PORT=8787`).
+Порт по умолчанию: **8787**.
 
 ### iOS
 
-См. [`ios/README.md`](ios/README.md): нужен физический iPhone с LiDAR, Xcode на Mac, камера + локальная сеть. В приложении введите `192.168.x.x:8787` и 4-символьный код с сайта. WebSocket: `ws://…`.
+См. [`ios/README.md`](ios/README.md). В приложении: хост `IP:8787` (подсказка `172.20.10.3:8787`) + 4-символьный код с сайта. Выберите **LiDAR mesh** для реального скана или **RoomPlan** для схемы.
 
 ---
 
@@ -32,19 +36,17 @@ npm start
 room-live/
   README.md
   package.json
-  server/          Express + WS-реле
-  web/             Three.js вьюер
-  ios/RoomLive/    SwiftUI + RoomPlan
+  server/          Express + WS-реле (до ~8MB на сообщение)
+  web/             Three.js вьюер (mesh + RoomPlan)
+  ios/RoomLive/    SwiftUI + ARKit mesh / RoomPlan
 ```
 
 ## Сервер
 
 - Статика из `../web`
-- WebSocket на том же порту
-- CORS включён
+- WebSocket на том же порту, `maxPayload` 8MB (плотный mesh)
 - Роли: `phone` / `web`
-- 4-символьные коды сессий
-- `room_update` / `room_final` с телефона → всем web в сессии
+- Типы: `room_update` / `room_final` / **`mesh_update`**
 
 ### WS API (кратко)
 
@@ -52,51 +54,35 @@ room-live/
 |------|-----|----------|
 | `create_session` | web | создать код |
 | `join` `{role, code}` | phone/web | войти в сессию |
-| `room_update` / `room_final` | phone | геометрия комнаты |
+| `room_update` / `room_final` | phone | схематичная геометрия RoomPlan |
+| `mesh_update` | phone | плотный LiDAR mesh |
 | `ping` | любой | → `pong` |
 
-## Схема комнаты
+### mesh_update
 
 ```json
 {
-  "type": "room_update",
-  "walls": [
+  "type": "mesh_update",
+  "chunks": [
     {
-      "id": "wall-0",
-      "width": 4.0,
-      "height": 2.5,
-      "transform": [16 floats, column-major],
-      "position": { "x": 0, "y": 1.25, "z": -1.5 },
-      "rotationY": 0
-    }
-  ],
-  "doors": [{ "id": "door-0", "width": 0.9, "height": 2.1, "position": {...}, "rotationY": 0 }],
-  "windows": [{ "id": "window-0", "width": 1.4, "height": 1.2, "position": {...}, "rotationY": 0 }],
-  "objects": [
-    {
-      "id": "obj-0",
-      "category": "table",
-      "width": 1.2,
-      "height": 0.75,
-      "depth": 0.7,
-      "position": { "x": 0, "y": 0.375, "z": 0 },
-      "rotationY": 0.1
+      "id": "mesh-0",
+      "vertices": [x,y,z, ...],
+      "indices": [i0,i1,i2, ...],
+      "colors": [r,g,b, ...]
     }
   ]
 }
 ```
 
-`transform` — опционально (16 float, column-major для Three.js). Иначе достаточно `position` + `rotationY`.
-
-На вебе: стены — тонкие боксы, двери/окна — цветные панели, мебель — боксы с подписями.
+На вебе: `THREE.BufferGeometry` + `MeshStandardMaterial` с `vertexColors`, чанки обновляются по `id`.
 
 ---
 
 ## English (short)
 
-Live room scan MVP: RoomPlan on iPhone streams JSON over WebSocket; browser rebuilds the room with Three.js. Run `npm install && npm start` in `server/`, open port **8787**, use **Demo** without a phone. Physical LiDAR iPhone + Xcode required for real scans (`ios/README.md`). Session codes are 4 characters; roles `phone` / `web`.
+Live room scan: **ARKit scene reconstruction** (`.meshWithColor`) streams dense colored meshes over WebSocket; browser rebuilds them with Three.js. RoomPlan parametric boxes remain as a secondary mode. Run `npm install && npm start` in `server/`, open port **8787**. Needs a physical **LiDAR iPhone**. Use **LiDAR mesh** in the app for a photographed/scanned look; **Demo** still shows the schematic room without a phone.
 
 ## Скачать IPA для iPhone
 
-GitHub Actions собирает артефакт **RoomLive-unsigned.ipa** (вкладка Actions → Build IPA → Artifacts).  
-Установка: Sideloadly / AltStore (подпись своим Apple ID). Xcode на твоём ПК не обязателен.
+GitHub Actions → **Build IPA** → артефакт **RoomLive-unsigned.ipa**.  
+Установка: Sideloadly / AltStore (подпись своим Apple ID).

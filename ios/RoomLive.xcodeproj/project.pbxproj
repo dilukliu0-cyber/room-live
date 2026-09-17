@@ -14,6 +14,10 @@
 		D2181C8DAA04D732561787DB /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EAEB1A6F539B9BBB086026B /* WebSocketClient.swift */; };
 		76BD0A472009CC1C38842678 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7376B0F026AA748882D62FA8 /* Assets.xcassets */; };
 		5631A545433915C9055E6EF6 /* RoomPlan.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6411FC476AE6EE6E681F87A4 /* RoomPlan.framework */; };
+		C3D4E5F60718293A4B5C6D7E /* MeshScanModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* MeshScanModel.swift */; };
+		D4E5F60718293A4B5C6D7E8F /* MeshScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* MeshScanView.swift */; };
+		0718293A4B5C6D7E8F901A2B /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5F60718293A4B5C6D7E8F90 /* ARKit.framework */; };
+		18293A4B5C6D7E8F901A2B3C /* RealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F901A /* RealityKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +30,10 @@
 		D72E3FE0E2E74E78BBC72847 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		7376B0F026AA748882D62FA8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6411FC476AE6EE6E681F87A4 /* RoomPlan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RoomPlan.framework; path = System/Library/Frameworks/RoomPlan.framework; sourceTree = SDKROOT; };
+		A1B2C3D4E5F60718293A4B5C /* MeshScanModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshScanModel.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D /* MeshScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshScanView.swift; sourceTree = "<group>"; };
+		E5F60718293A4B5C6D7E8F90 /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = System/Library/Frameworks/ARKit.framework; sourceTree = SDKROOT; };
+		F60718293A4B5C6D7E8F901A /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = System/Library/Frameworks/RealityKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -34,6 +42,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				5631A545433915C9055E6EF6 /* RoomPlan.framework in Frameworks */,
+				0718293A4B5C6D7E8F901A2B /* ARKit.framework in Frameworks */,
+				18293A4B5C6D7E8F901A2B3C /* RealityKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -56,6 +66,8 @@
 				E724D8270D03F411DDA29C2D /* ContentView.swift */,
 				F6A7A415F185B2941F4A7FCF /* ScanView.swift */,
 				EEF99A219EB64D80A108C1B7 /* RoomCaptureModel.swift */,
+				B2C3D4E5F60718293A4B5C6D /* MeshScanView.swift */,
+				A1B2C3D4E5F60718293A4B5C /* MeshScanModel.swift */,
 				4EAEB1A6F539B9BBB086026B /* WebSocketClient.swift */,
 				7376B0F026AA748882D62FA8 /* Assets.xcassets */,
 				D72E3FE0E2E74E78BBC72847 /* Info.plist */,
@@ -75,6 +87,8 @@
 			isa = PBXGroup;
 			children = (
 				6411FC476AE6EE6E681F87A4 /* RoomPlan.framework */,
+				E5F60718293A4B5C6D7E8F90 /* ARKit.framework */,
+				F60718293A4B5C6D7E8F901A /* RealityKit.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -153,6 +167,8 @@
 				7AF915549775FF0CD8EFCBE2 /* ContentView.swift in Sources */,
 				DAE7825F407645AD16B59CB0 /* ScanView.swift in Sources */,
 				48D1C351185A23170637807F /* RoomCaptureModel.swift in Sources */,
+				D4E5F60718293A4B5C6D7E8F /* MeshScanView.swift in Sources */,
+				C3D4E5F60718293A4B5C6D7E /* MeshScanModel.swift in Sources */,
 				D2181C8DAA04D732561787DB /* WebSocketClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

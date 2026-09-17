@@ -59,6 +59,118 @@ scene.add(roomGroup);
 /** @type {Map<string, THREE.Object3D>} */
 const entityMap = new Map();
 
+/** @type {Map<string, THREE.Mesh>} */
+const meshChunkMap = new Map();
+const meshGroup = new THREE.Group();
+scene.add(meshGroup);
+let lastFitAt = 0;
+
+function clearMeshes() {
+  for (const mesh of meshChunkMap.values()) {
+    meshGroup.remove(mesh);
+    disposeObject(mesh);
+  }
+  meshChunkMap.clear();
+}
+
+function upsertMeshChunk(chunk) {
+  const id = chunk.id || `mesh-${meshChunkMap.size}`;
+  const verts = chunk.vertices;
+  const indices = chunk.indices;
+  const colors = chunk.colors;
+  if (!Array.isArray(verts) || verts.length < 9) return;
+
+  const positions = new Float32Array(verts.length);
+  for (let i = 0; i < verts.length; i++) positions[i] = verts[i];
+
+  let root = meshChunkMap.get(id);
+  if (!root) {
+    const geo = new THREE.BufferGeometry();
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: 0.05,
+      roughness: 0.85,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    });
+    root = new THREE.Mesh(geo, mat);
+    root.castShadow = false;
+    root.receiveShadow = true;
+    meshGroup.add(root);
+    meshChunkMap.set(id, root);
+  }
+
+  const geo = root.geometry;
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+  if (Array.isArray(colors) && colors.length >= positions.length) {
+    const cols = new Float32Array(colors.length);
+    for (let i = 0; i < colors.length; i++) cols[i] = colors[i];
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  } else {
+    const cols = new Float32Array(positions.length);
+    for (let i = 0; i < cols.length; i += 3) {
+      cols[i] = 0.55;
+      cols[i + 1] = 0.58;
+      cols[i + 2] = 0.6;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  }
+
+  if (Array.isArray(indices) && indices.length >= 3) {
+    const maxIndex = positions.length / 3 - 1;
+    const safe = [];
+    for (let i = 0; i + 2 < indices.length; i += 3) {
+      const a = indices[i], b = indices[i + 1], c = indices[i + 2];
+      if (a > maxIndex || b > maxIndex || c > maxIndex) continue;
+      safe.push(a, b, c);
+    }
+    if (safe.length >= 3) {
+      const IndexArray = maxIndex > 65535 ? Uint32Array : Uint16Array;
+      geo.setIndex(new IndexArray(safe));
+    } else {
+      geo.setIndex(null);
+    }
+  } else {
+    geo.setIndex(null);
+  }
+
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+}
+
+function applyMeshPayload(msg) {
+  const chunks = msg.chunks || [];
+  for (const ch of chunks) upsertMeshChunk(ch);
+  const nV = [...meshChunkMap.values()].reduce((acc, m) => {
+    const attr = m.geometry?.getAttribute('position');
+    return acc + (attr ? attr.count : 0);
+  }, 0);
+  metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}`;
+  const now = performance.now();
+  if (now - lastFitAt > 2500) {
+    lastFitAt = now;
+    fitCameraToMeshes();
+  }
+}
+
+function fitCameraToMeshes() {
+  if (meshChunkMap.size === 0) return;
+  const box = new THREE.Box3();
+  for (const m of meshChunkMap.values()) box.expandByObject(m);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(size.length() * 0.5, 0.5);
+  controls.target.copy(center);
+  camera.position.set(center.x + radius * 1.2, center.y + radius * 0.8, center.z + radius * 1.2);
+  camera.near = Math.max(0.05, radius / 100);
+  camera.far = Math.max(100, radius * 20);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+
 function setStatus(text, kind = '') {
   statusEl.textContent = text;
   statusEl.className = 'status' + (kind ? ` ${kind}` : '');
@@ -97,6 +209,7 @@ function clearRoom() {
     disposeObject(obj);
   }
   entityMap.clear();
+  clearMeshes();
   metaEl.textContent = 'сцена очищена';
 }
 
@@ -322,6 +435,7 @@ function connect(codeToJoin) {
           : 'ожидание iPhone…';
         break;
       case 'phone_joined':
+        clearRoom();
         metaEl.textContent = 'iPhone подключён';
         setStatus('сканирование', 'ok');
         break;
@@ -333,6 +447,10 @@ function connect(codeToJoin) {
       case 'room_final':
         applyRoomPayload(msg);
         if (msg.type === 'room_final') setStatus('скан завершён', 'ok');
+        break;
+      case 'mesh_update':
+        applyMeshPayload(msg);
+        setStatus('LiDAR mesh', 'ok');
         break;
       case 'error':
         setStatus(`ошибка: ${msg.message}`, 'err');
