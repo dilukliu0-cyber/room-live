@@ -208,6 +208,8 @@ wss.on('connection', (ws, req) => {
       const { session } = getOrCreateSession(meta.code);
       const chunkCount = Array.isArray(msg.chunks) ? msg.chunks.length : 0;
       const viewers = session.webs.size;
+      let vertHint = 0;
+      if (chunkCount > 0 && Array.isArray(msg.chunks[0].vertices)) vertHint = msg.chunks[0].vertices.length / 3;
       // Forward raw phone JSON to webs — avoids double JSON.stringify memory blow.
       for (const client of session.webs) {
         if (client.readyState === 1) client.send(rawText);
@@ -215,7 +217,7 @@ wss.on('connection', (ws, req) => {
       if (viewers === 0) {
         console.warn(`[room-live] WARN mesh_update viewers=0 chunks=${chunkCount} bytes=${byteLen} code=${meta.code}`);
       } else {
-        console.log(`[room-live] mesh_update relay chunks=${chunkCount} viewers=${viewers} bytes=${byteLen} code=${meta.code}`);
+        console.log(`[room-live] mesh_update relay chunks=${chunkCount} viewers=${viewers} verts0=${Math.floor(vertHint)} bytes=${byteLen} code=${meta.code}`);
       }
       send(ws, {
         type: 'ack',

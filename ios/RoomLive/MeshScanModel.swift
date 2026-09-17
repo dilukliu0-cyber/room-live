@@ -17,7 +17,7 @@ final class MeshScanModel: NSObject, ObservableObject {
     private var session: ARSession?
     private var sendTimer: Timer?
     private var lastSend = Date.distantPast
-    private let minInterval: TimeInterval = 0.4
+    private let minInterval: TimeInterval = 0.25
     /// Keep every Nth face when packing (1 = all). Raised automatically if payload is huge.
     private var faceStride = 1
     /// Cap to reduce WS frame failures on phone hotspot / LAN.
@@ -228,7 +228,7 @@ final class MeshScanModel: NSObject, ObservableObject {
                 round3(Double(world.z)),
             ])
             let rgb = sampleColor(worldPosition: SIMD3(world.x, world.y, world.z), frame: frame)
-            colors.append(contentsOf: [round3(rgb.0), round3(rgb.1), round3(rgb.2)])
+            colors.append(contentsOf: [round3(max(0.25, rgb.0)), round3(max(0.25, rgb.1)), round3(max(0.25, rgb.2))])
         }
 
         var indices: [Int] = []

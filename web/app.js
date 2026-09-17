@@ -24,7 +24,7 @@ let demoRunning = false;
 const viewport = $('viewport');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050706);
-scene.fog = new THREE.Fog(0x050706, 18, 45);
+scene.fog = null; // was Fog — hid dark LiDAR meshes
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 100);
 camera.position.set(4.5, 3.2, 5.5);
@@ -75,7 +75,7 @@ function clearMeshes() {
   meshUpdateCount = 0;
   // Restore default fog when mesh cleared
   if (!scene.fog) {
-    scene.fog = new THREE.Fog(0x050706, 18, 45);
+    scene.fog = null; // was Fog — hid dark LiDAR meshes
   } else {
     scene.fog.near = 18;
     scene.fog.far = 45;
@@ -83,23 +83,30 @@ function clearMeshes() {
 }
 
 function upsertMeshChunk(chunk) {
-  const id = chunk.id || `mesh-${meshChunkMap.size}`;
-  const verts = chunk.vertices;
-  const indices = chunk.indices;
-  const colors = chunk.colors;
-  if (!Array.isArray(verts) || verts.length < 9) return;
+  const id = chunk.id || chunk.uuid || `mesh-${meshChunkMap.size}`;
+  // Accept alternate field names from older/newer clients.
+  const verts = chunk.vertices || chunk.positions || chunk.verts;
+  const indices = chunk.indices || chunk.faces || chunk.tris;
+  const colors = chunk.colors || chunk.vertexColors;
+  if (!Array.isArray(verts) || verts.length < 9) {
+    console.warn('[room-live] skip chunk', id, 'verts', verts && verts.length);
+    return false;
+  }
 
   const positions = new Float32Array(verts.length);
-  for (let i = 0; i < verts.length; i++) positions[i] = verts[i];
+  for (let i = 0; i < verts.length; i++) positions[i] = Number(verts[i]) || 0;
 
   let root = meshChunkMap.get(id);
   if (!root) {
     const geo = new THREE.BufferGeometry();
+    // Unlit + bright fallback so dark LiDAR samples stay visible on black bg.
     const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
       vertexColors: true,
       side: THREE.DoubleSide,
     });
     root = new THREE.Mesh(geo, mat);
+    root.frustumCulled = false;
     root.castShadow = false;
     root.receiveShadow = false;
     meshGroup.add(root);
@@ -107,45 +114,36 @@ function upsertMeshChunk(chunk) {
   }
 
   const geo = root.geometry;
-  // Dispose previous GPU buffers so setAttribute does not leave stale data.
-  const prevPos = geo.getAttribute('position');
-  const prevCol = geo.getAttribute('color');
-  const prevIdx = geo.getIndex();
-  if (prevPos) geo.deleteAttribute('position');
-  if (prevCol) geo.deleteAttribute('color');
-  if (prevIdx) geo.setIndex(null);
-  if (prevPos && prevPos.array !== positions) prevPos.array = null;
-  if (prevCol) prevCol.array = null;
-
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.attributes.position.needsUpdate = true;
 
+  const cols = new Float32Array(positions.length);
   if (Array.isArray(colors) && colors.length >= positions.length) {
-    const cols = new Float32Array(colors.length);
-    for (let i = 0; i < colors.length; i++) cols[i] = colors[i];
-    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-  } else {
-    const cols = new Float32Array(positions.length);
-    for (let i = 0; i < cols.length; i += 3) {
-      cols[i] = 0.55;
-      cols[i + 1] = 0.58;
-      cols[i + 2] = 0.6;
+    for (let i = 0; i < positions.length; i += 3) {
+      // Lift dark camera samples so mesh is never near-black on dark background.
+      cols[i] = Math.min(1, Math.max(0.22, Number(colors[i]) || 0) * 1.25);
+      cols[i + 1] = Math.min(1, Math.max(0.22, Number(colors[i + 1]) || 0) * 1.25);
+      cols[i + 2] = Math.min(1, Math.max(0.22, Number(colors[i + 2]) || 0) * 1.25);
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  } else {
+    for (let i = 0; i < cols.length; i += 3) {
+      cols[i] = 0.35; cols[i + 1] = 0.9; cols[i + 2] = 0.7; // mint fallback
+    }
   }
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   geo.attributes.color.needsUpdate = true;
 
   if (Array.isArray(indices) && indices.length >= 3) {
     const maxIndex = positions.length / 3 - 1;
     const safe = [];
     for (let i = 0; i + 2 < indices.length; i += 3) {
-      const a = indices[i], b = indices[i + 1], c = indices[i + 2];
-      if (a > maxIndex || b > maxIndex || c > maxIndex) continue;
+      const a = indices[i] | 0, b = indices[i + 1] | 0, c = indices[i + 2] | 0;
+      if (a > maxIndex || b > maxIndex || c > maxIndex || a < 0 || b < 0 || c < 0) continue;
       safe.push(a, b, c);
     }
     if (safe.length >= 3) {
       const IndexArray = maxIndex > 65535 ? Uint32Array : Uint16Array;
-      geo.setIndex(new IndexArray(safe));
+      geo.setIndex(new THREE.BufferAttribute(new IndexArray(safe), 1));
       if (geo.index) geo.index.needsUpdate = true;
     } else {
       geo.setIndex(null);
@@ -154,30 +152,36 @@ function upsertMeshChunk(chunk) {
     geo.setIndex(null);
   }
 
-  geo.computeVertexNormals();
   geo.computeBoundingBox();
   geo.computeBoundingSphere();
+  return true;
 }
 
 function applyMeshPayload(msg) {
-  const chunks = msg.chunks || [];
-  for (const ch of chunks) upsertMeshChunk(ch);
+  const chunks = msg.chunks || msg.meshes || [];
+  let applied = 0;
+  for (const ch of chunks) {
+    if (upsertMeshChunk(ch)) applied += 1;
+  }
   meshUpdateCount += 1;
 
   // Fog can hide mesh; disable while LiDAR is present.
-  if (meshChunkMap.size > 0 && scene.fog) {
-    scene.fog = null;
-  }
+  scene.fog = null;
 
   const nV = [...meshChunkMap.values()].reduce((acc, m) => {
     const attr = m.geometry?.getAttribute('position');
     return acc + (attr ? attr.count : 0);
   }, 0);
-  metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}`;
-  setStatus(`LiDAR live · ${meshChunkMap.size} chunks · ${nV} verts`, 'ok');
+  const sample = chunks[0]?.vertices || chunks[0]?.positions;
+  const sampleTxt = sample && sample.length >= 3
+    ? ` · p0=(${Number(sample[0]).toFixed(2)},${Number(sample[1]).toFixed(2)},${Number(sample[2]).toFixed(2)})`
+    : '';
+  metaEl.textContent = `LiDAR mesh · чанков: ${meshChunkMap.size} · вершин: ${nV}${sampleTxt}`;
+  setStatus(`LiDAR live · in=${chunks.length} ok=${applied} · ${nV} verts`, 'ok');
+  setDebug('mesh_update', chunks.length);
+  // Fit aggressively so first packets are on screen.
   const now = performance.now();
-  // Fit on every update for the first 15, then ~1s.
-  if (meshUpdateCount <= 15 || now - lastFitAt > 1000) {
+  if (meshUpdateCount <= 30 || now - lastFitAt > 600) {
     lastFitAt = now;
     fitCameraToMeshes();
   }
