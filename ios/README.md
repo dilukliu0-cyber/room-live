@@ -1,7 +1,7 @@
 # Room Live — iOS
 
 Два режима:
-- **LiDAR mesh** — ARKit `sceneReconstruction = .meshWithColor`, стрим плотного цветного меша (`mesh_update`).
+- **LiDAR mesh** — ARKit `sceneReconstruction = .meshWithClassification (colors from camera)`, стрим плотного цветного меша (`mesh_update`).
 - **RoomPlan** — схематические стены/мебель (`room_update`).
 
 ## Скачать готовый IPA (без Xcode у себя)

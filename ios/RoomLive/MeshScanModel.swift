@@ -1,9 +1,11 @@
 import Foundation
 import Combine
 import ARKit
+import CoreVideo
+import CoreGraphics
 import simd
 
-/// Streams dense LiDAR scene-reconstruction meshes (vertices / faces / optional colors) over WebSocket.
+/// Streams dense LiDAR scene-reconstruction meshes (vertices / faces / camera-sampled colors) over WebSocket.
 @MainActor
 final class MeshScanModel: NSObject, ObservableObject {
     @Published var isScanning = false
@@ -41,15 +43,17 @@ final class MeshScanModel: NSObject, ObservableObject {
 
     func start() {
         guard let session else { return }
-        guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithColor)
-            || ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) else {
+        let supportsMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+        let supportsClassified = ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
+        guard supportsMesh || supportsClassified else {
             wsStatus = "устройство без LiDAR / scene reconstruction"
             return
         }
 
         let config = ARWorldTrackingConfiguration()
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithColor) {
-            config.sceneReconstruction = .meshWithColor
+        // Prefer classified mesh when available; color comes from camera sampling.
+        if supportsClassified {
+            config.sceneReconstruction = .meshWithClassification
         } else {
             config.sceneReconstruction = .mesh
         }
@@ -72,11 +76,14 @@ final class MeshScanModel: NSObject, ObservableObject {
 
     private func startSendTimer() {
         sendTimer?.invalidate()
-        sendTimer = Timer.scheduledTimer(withTimeInterval: minInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+        let timer = Timer(timeInterval: minInterval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
                 self?.collectAndSend()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        sendTimer = timer
     }
 
     private func collectAndSend() {
@@ -145,7 +152,6 @@ final class MeshScanModel: NSObject, ObservableObject {
         let stride = max(1, faceStride)
         let transform = anchor.transform
 
-        // Collect unique vertex indices referenced by kept faces
         var usedOld: Set<Int> = []
         var keptTris: [(Int, Int, Int)] = []
         keptTris.reserveCapacity((faceCount / stride) + 1)

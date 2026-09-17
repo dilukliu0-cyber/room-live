@@ -80,7 +80,7 @@ room-live/
 
 ## English (short)
 
-Live room scan: **ARKit scene reconstruction** (`.meshWithColor`) streams dense colored meshes over WebSocket; browser rebuilds them with Three.js. RoomPlan parametric boxes remain as a secondary mode. Run `npm install && npm start` in `server/`, open port **8787**. Needs a physical **LiDAR iPhone**. Use **LiDAR mesh** in the app for a photographed/scanned look; **Demo** still shows the schematic room without a phone.
+Live room scan: **ARKit scene reconstruction** (`mesh (+ camera color sampling)`) streams dense colored meshes over WebSocket; browser rebuilds them with Three.js. RoomPlan parametric boxes remain as a secondary mode. Run `npm install && npm start` in `server/`, open port **8787**. Needs a physical **LiDAR iPhone**. Use **LiDAR mesh** in the app for a photographed/scanned look; **Demo** still shows the schematic room without a phone.
 
 ## Скачать IPA для iPhone
 
