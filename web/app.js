@@ -63,6 +63,10 @@ const entityMap = new Map();
 const meshChunkMap = new Map();
 const meshGroup = new THREE.Group();
 scene.add(meshGroup);
+
+/** Catalog props (editor) — never mixed into LiDAR meshGroup */
+const propsGroup = new THREE.Group();
+scene.add(propsGroup);
 let lastFitAt = 0;
 let meshUpdateCount = 0;
 
@@ -702,5 +706,462 @@ function runDemo() {
 }
 
 btnDemo.addEventListener('click', runDemo);
+
+// =============================================================================
+// Catalog / room editor (props only — LiDAR mesh is not deletable)
+// =============================================================================
+
+const PROPS_STORAGE_KEY = 'room-live-props-v1';
+const ROTATE_STEP = Math.PI / 8;
+
+const CATALOG = [
+  { id: 'macbook', name: 'MacBook', icon: '💻', desc: 'ноутбук' },
+  { id: 'table', name: 'Стол', icon: '🪑', desc: 'письменный стол' },
+  { id: 'chair', name: 'Стул', icon: '💺', desc: 'офисный стул' },
+  { id: 'lamp', name: 'Лампа', icon: '💡', desc: 'настольная лампа' },
+  { id: 'monitor', name: 'Монитор', icon: '🖥️', desc: 'экран' },
+  { id: 'plant', name: 'Растение', icon: '🌿', desc: 'горшок' },
+];
+
+const raycaster = new THREE.Raycaster();
+const pointerNdc = new THREE.Vector2();
+const _box = new THREE.Box3();
+const _size = new THREE.Vector3();
+
+let placeCatalogId = null;
+/** @type {THREE.Object3D | null} */
+let selectedProp = null;
+let pointerDown = null;
+
+const catalogGrid = $('catalogGrid');
+const selectionInfo = $('selectionInfo');
+const placeHintEl = $('placeHint');
+const btnRotateLeft = $('btnRotateLeft');
+const btnRotateRight = $('btnRotateRight');
+const btnDeleteProp = $('btnDeleteProp');
+const btnCancelPlace = $('btnCancelPlace');
+const btnSaveProps = $('btnSaveProps');
+const btnLoadProps = $('btnLoadProps');
+const btnDownloadJson = $('btnDownloadJson');
+const btnUploadJson = $('btnUploadJson');
+const jsonFileInput = $('jsonFileInput');
+
+function mat(color, opts = {}) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    metalness: opts.metalness ?? 0.15,
+    roughness: opts.roughness ?? 0.55,
+    emissive: opts.emissive ?? 0x000000,
+    emissiveIntensity: opts.emissiveIntensity ?? 0,
+  });
+}
+
+function buildCatalogMesh(catalogId) {
+  const root = new THREE.Group();
+  root.userData.kind = 'catalog-prop';
+  root.userData.catalogId = catalogId;
+
+  switch (catalogId) {
+    case 'macbook': {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.012, 0.22), mat(0xc8ccd0, { metalness: 0.55, roughness: 0.35 }));
+      base.position.y = 0.006;
+      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.2, 0.008), mat(0x1a1f24, { metalness: 0.4, roughness: 0.4 }));
+      screen.position.set(0, 0.11, -0.105);
+      screen.rotation.x = -0.18;
+      const display = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.17), mat(0x4aa3ff, { emissive: 0x2266aa, emissiveIntensity: 0.35, roughness: 0.3 }));
+      display.position.set(0, 0.11, -0.1);
+      display.rotation.x = -0.18;
+      root.add(base, screen, display);
+      break;
+    }
+    case 'table': {
+      const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.7), mat(0x8b5a2b, { roughness: 0.75 }));
+      top.position.y = 0.74;
+      root.add(top);
+      const legGeo = new THREE.BoxGeometry(0.05, 0.72, 0.05);
+      const legMat = mat(0x3a2a1a, { roughness: 0.85 });
+      for (const [x, z] of [[-0.52, -0.28], [0.52, -0.28], [-0.52, 0.28], [0.52, 0.28]]) {
+        const leg = new THREE.Mesh(legGeo, legMat);
+        leg.position.set(x, 0.36, z);
+        root.add(leg);
+      }
+      break;
+    }
+    case 'chair': {
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.05, 0.45), mat(0x2c4a3e));
+      seat.position.y = 0.45;
+      const back = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 0.05), mat(0x2c4a3e));
+      back.position.set(0, 0.7, -0.2);
+      const legGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.45, 8);
+      const legMat = mat(0x222222, { metalness: 0.5, roughness: 0.4 });
+      for (const [x, z] of [[-0.16, -0.16], [0.16, -0.16], [-0.16, 0.16], [0.16, 0.16]]) {
+        const leg = new THREE.Mesh(legGeo, legMat);
+        leg.position.set(x, 0.225, z);
+        root.add(leg);
+      }
+      root.add(seat, back);
+      break;
+    }
+    case 'lamp': {
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.03, 16), mat(0x333333, { metalness: 0.6 }));
+      base.position.y = 0.015;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.45, 8), mat(0x888888, { metalness: 0.7 }));
+      pole.position.y = 0.25;
+      const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.14, 16, 1, true), mat(0xffe0a0, { emissive: 0xffaa44, emissiveIntensity: 0.45, roughness: 0.6, metalness: 0 }));
+      shade.position.y = 0.52;
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 12), mat(0xfff2c8, { emissive: 0xffcc66, emissiveIntensity: 0.8 }));
+      bulb.position.y = 0.48;
+      root.add(base, pole, shade, bulb);
+      break;
+    }
+    case 'monitor': {
+      const stand = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.02, 0.12), mat(0x222222));
+      stand.position.y = 0.01;
+      const neck = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.03), mat(0x222222));
+      neck.position.y = 0.11;
+      const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.34, 0.03), mat(0x1a1a1a, { metalness: 0.3 }));
+      bezel.position.y = 0.35;
+      const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.29), mat(0x3d7eff, { emissive: 0x1a4aaa, emissiveIntensity: 0.4 }));
+      screen.position.set(0, 0.35, 0.017);
+      root.add(stand, neck, bezel, screen);
+      break;
+    }
+    case 'plant': {
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.08, 0.14, 12), mat(0xb5674a, { roughness: 0.9 }));
+      pot.position.y = 0.07;
+      const soil = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.02, 12), mat(0x3a2a1a));
+      soil.position.y = 0.14;
+      const leafMat = mat(0x3d9b5f, { roughness: 0.7 });
+      for (let i = 0; i < 5; i++) {
+        const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 10), leafMat);
+        const a = (i / 5) * Math.PI * 2;
+        leaf.position.set(Math.cos(a) * 0.07, 0.28 + (i % 2) * 0.06, Math.sin(a) * 0.07);
+        leaf.scale.set(1, 1.35, 0.7);
+        root.add(leaf);
+      }
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 10), leafMat);
+      top.position.y = 0.4;
+      root.add(pot, soil, top);
+      break;
+    }
+    default: {
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), mat(0x5dffb1));
+      box.position.y = 0.2;
+      root.add(box);
+    }
+  }
+
+  root.traverse((c) => {
+    if (c.isMesh) {
+      c.castShadow = true;
+      c.receiveShadow = true;
+      c.userData.propRoot = root;
+    }
+  });
+  return root;
+}
+
+function getPropRootFromHit(obj) {
+  let o = obj;
+  while (o) {
+    if (o.userData?.kind === 'catalog-prop') return o;
+    o = o.parent;
+  }
+  return null;
+}
+
+function setPlaceMode(catalogId) {
+  placeCatalogId = catalogId;
+  if (catalogId) {
+    selectProp(null);
+    viewport.classList.add('placing');
+    placeHintEl?.classList.remove('hidden');
+    placeHintEl.textContent = `Размещение: ${CATALOG.find((c) => c.id === catalogId)?.name || catalogId} — клик по полу / мешу`;
+  } else {
+    viewport.classList.remove('placing');
+    placeHintEl?.classList.add('hidden');
+  }
+  refreshCatalogButtons();
+}
+
+function refreshCatalogButtons() {
+  if (!catalogGrid) return;
+  for (const btn of catalogGrid.querySelectorAll('.catalog-item')) {
+    btn.classList.toggle('selected', btn.dataset.id === placeCatalogId);
+  }
+}
+
+function setSelectionHighlight(prop, on) {
+  if (!prop) return;
+  prop.traverse((c) => {
+    if (!c.isMesh || !c.material) return;
+    const mats = Array.isArray(c.material) ? c.material : [c.material];
+    for (const m of mats) {
+      if (!m.emissive) continue;
+      if (on) {
+        if (c.userData._savedEmissive == null) {
+          c.userData._savedEmissive = m.emissive.getHex();
+          c.userData._savedEmissiveIntensity = m.emissiveIntensity ?? 0;
+        }
+        m.emissive.setHex(0x5dffb1);
+        m.emissiveIntensity = Math.max(0.45, (c.userData._savedEmissiveIntensity || 0) + 0.35);
+      } else if (c.userData._savedEmissive != null) {
+        m.emissive.setHex(c.userData._savedEmissive);
+        m.emissiveIntensity = c.userData._savedEmissiveIntensity || 0;
+        delete c.userData._savedEmissive;
+        delete c.userData._savedEmissiveIntensity;
+      }
+    }
+  });
+}
+
+function selectProp(prop) {
+  if (selectedProp && selectedProp !== prop) setSelectionHighlight(selectedProp, false);
+  selectedProp = prop;
+  if (selectedProp) setSelectionHighlight(selectedProp, true);
+  if (selectionInfo) {
+    if (!selectedProp) {
+      selectionInfo.textContent = 'ничего не выбрано';
+    } else {
+      const cat = CATALOG.find((c) => c.id === selectedProp.userData.catalogId);
+      selectionInfo.textContent = cat ? `${cat.name} · поворот ${(selectedProp.rotation.y * 180 / Math.PI).toFixed(0)}°` : selectedProp.userData.catalogId;
+    }
+  }
+}
+
+function floorSnapY(prop, hitY) {
+  _box.setFromObject(prop);
+  _box.getSize(_size);
+  // After setFromObject, min.y is world; we want bottom on hitY
+  const worldMinY = _box.min.y;
+  const dy = hitY - worldMinY;
+  prop.position.y += dy;
+}
+
+function placePropAt(point, catalogId) {
+  const prop = buildCatalogMesh(catalogId);
+  prop.position.set(point.x, point.y, point.z);
+  propsGroup.add(prop);
+  // First place at hit, then snap bottom to hit Y (floor snap)
+  floorSnapY(prop, point.y);
+  selectProp(prop);
+  persistPropsLocal();
+  return prop;
+}
+
+function deleteSelectedProp() {
+  if (!selectedProp) return;
+  const p = selectedProp;
+  selectProp(null);
+  propsGroup.remove(p);
+  disposeObject(p);
+  persistPropsLocal();
+}
+
+function rotateSelected(dir) {
+  if (!selectedProp) return;
+  selectedProp.rotation.y += dir * ROTATE_STEP;
+  selectProp(selectedProp); // refresh label
+  persistPropsLocal();
+}
+
+function serializeProps() {
+  const items = [];
+  for (const child of propsGroup.children) {
+    if (child.userData?.kind !== 'catalog-prop') continue;
+    items.push({
+      catalogId: child.userData.catalogId,
+      position: { x: child.position.x, y: child.position.y, z: child.position.z },
+      rotationY: child.rotation.y,
+    });
+  }
+  return { version: 1, props: items };
+}
+
+function clearAllProps() {
+  selectProp(null);
+  for (const child of [...propsGroup.children]) {
+    propsGroup.remove(child);
+    disposeObject(child);
+  }
+}
+
+function loadPropsData(data) {
+  if (!data || !Array.isArray(data.props)) throw new Error('Неверный формат JSON');
+  clearAllProps();
+  for (const item of data.props) {
+    const id = item.catalogId;
+    if (!id) continue;
+    const prop = buildCatalogMesh(id);
+    const p = item.position || {};
+    prop.position.set(Number(p.x) || 0, Number(p.y) || 0, Number(p.z) || 0);
+    prop.rotation.y = Number(item.rotationY) || 0;
+    propsGroup.add(prop);
+  }
+}
+
+function persistPropsLocal() {
+  try {
+    localStorage.setItem(PROPS_STORAGE_KEY, JSON.stringify(serializeProps()));
+  } catch (_) { /* ignore quota */ }
+}
+
+function loadPropsLocal() {
+  try {
+    const raw = localStorage.getItem(PROPS_STORAGE_KEY);
+    if (!raw) {
+      setStatus('нет сохранённых объектов', 'warn');
+      return;
+    }
+    loadPropsData(JSON.parse(raw));
+    setStatus('объекты загружены', 'ok');
+  } catch (e) {
+    setStatus('ошибка загрузки', 'err');
+  }
+}
+
+function downloadPropsJson() {
+  const blob = new Blob([JSON.stringify(serializeProps(), null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'room-live-props.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function setPointerFromEvent(ev) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNdc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function pickPlacementPoint() {
+  raycaster.setFromCamera(pointerNdc, camera);
+  // Prefer floor/mesh: ignore existing props
+  const meshTargets = [...meshChunkMap.values()];
+  const roomTargets = [...entityMap.values()];
+  const groundTargets = [grid, ...meshTargets, ...roomTargets];
+  const hits = raycaster.intersectObjects(groundTargets, true);
+  // Filter out anything under propsGroup just in case
+  const usable = hits.filter((h) => {
+    let o = h.object;
+    while (o) {
+      if (o === propsGroup || o.userData?.kind === 'catalog-prop') return false;
+      o = o.parent;
+    }
+    return true;
+  });
+  if (usable.length) return usable[0].point.clone();
+  // Fallback: intersect y=0 plane
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const pt = new THREE.Vector3();
+  if (raycaster.ray.intersectPlane(plane, pt)) return pt;
+  return null;
+}
+
+function pickProp() {
+  raycaster.setFromCamera(pointerNdc, camera);
+  const hits = raycaster.intersectObjects(propsGroup.children, true);
+  if (!hits.length) return null;
+  return getPropRootFromHit(hits[0].object);
+}
+
+function onPointerDown(ev) {
+  if (ev.button !== 0) return;
+  pointerDown = { x: ev.clientX, y: ev.clientY, t: performance.now() };
+}
+
+function onPointerUp(ev) {
+  if (ev.button !== 0 || !pointerDown) return;
+  const dx = ev.clientX - pointerDown.x;
+  const dy = ev.clientY - pointerDown.y;
+  const dist = Math.hypot(dx, dy);
+  pointerDown = null;
+  if (dist > 6) return; // orbit drag
+
+  setPointerFromEvent(ev);
+
+  if (placeCatalogId) {
+    const pt = pickPlacementPoint();
+    if (pt) {
+      placePropAt(pt, placeCatalogId);
+      setPlaceMode(null);
+    }
+    return;
+  }
+
+  const prop = pickProp();
+  selectProp(prop);
+}
+
+function buildCatalogUI() {
+  if (!catalogGrid) return;
+  catalogGrid.innerHTML = '';
+  for (const item of CATALOG) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'catalog-item';
+    btn.dataset.id = item.id;
+    btn.innerHTML = `<span class="cat-icon">${item.icon}</span><span class="cat-name">${item.name}</span><span class="cat-desc">${item.desc}</span>`;
+    btn.addEventListener('click', () => {
+      if (placeCatalogId === item.id) setPlaceMode(null);
+      else setPlaceMode(item.id);
+    });
+    catalogGrid.appendChild(btn);
+  }
+}
+
+btnRotateLeft?.addEventListener('click', () => rotateSelected(1));
+btnRotateRight?.addEventListener('click', () => rotateSelected(-1));
+btnDeleteProp?.addEventListener('click', () => deleteSelectedProp());
+btnCancelPlace?.addEventListener('click', () => setPlaceMode(null));
+btnSaveProps?.addEventListener('click', () => {
+  persistPropsLocal();
+  setStatus('объекты сохранены', 'ok');
+});
+btnLoadProps?.addEventListener('click', () => loadPropsLocal());
+btnDownloadJson?.addEventListener('click', () => downloadPropsJson());
+btnUploadJson?.addEventListener('click', () => jsonFileInput?.click());
+jsonFileInput?.addEventListener('change', async () => {
+  const file = jsonFileInput.files?.[0];
+  jsonFileInput.value = '';
+  if (!file) return;
+  try {
+    const text = await file.text();
+    loadPropsData(JSON.parse(text));
+    persistPropsLocal();
+    setStatus('JSON загружен', 'ok');
+  } catch (e) {
+    setStatus('ошибка JSON', 'err');
+  }
+});
+
+window.addEventListener('keydown', (ev) => {
+  const tag = (ev.target && ev.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (ev.key === 'Escape') {
+    setPlaceMode(null);
+    return;
+  }
+  if (ev.key === 'Delete' || ev.key === 'Backspace') {
+    if (selectedProp) {
+      ev.preventDefault();
+      deleteSelectedProp();
+    }
+    return;
+  }
+  if (ev.key === 'q' || ev.key === 'Q') rotateSelected(1);
+  if (ev.key === 'e' || ev.key === 'E') rotateSelected(-1);
+});
+
+renderer.domElement.addEventListener('pointerdown', onPointerDown);
+renderer.domElement.addEventListener('pointerup', onPointerUp);
+
+buildCatalogUI();
+// Restore last session props (does not affect mesh stream)
+try {
+  const raw = localStorage.getItem(PROPS_STORAGE_KEY);
+  if (raw) loadPropsData(JSON.parse(raw));
+} catch (_) { /* ignore */ }
 
 connect(null);

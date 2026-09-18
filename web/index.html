@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Room Live — сканирование комнаты</title>
+  <title>Room Live — редактор комнаты</title>
   <link rel="stylesheet" href="styles.css" />
   <script type="importmap">
   {
@@ -39,7 +39,33 @@
 
     <main id="viewport">
       <div id="phoneBanner" class="phone-banner warn">Телефон не подключён</div>
+      <div id="placeHint" class="place-hint hidden">Режим размещения: клик по полу / мешу</div>
     </main>
+
+    <aside class="catalog-panel" id="catalogPanel">
+      <h2 class="catalog-title">Каталог</h2>
+      <p class="catalog-note">Меш комнаты (LiDAR) нельзя удалить — только объекты из каталога.</p>
+      <div class="catalog-grid" id="catalogGrid"></div>
+
+      <h3 class="catalog-subtitle">Выбранный объект</h3>
+      <div class="meta" id="selectionInfo">ничего не выбрано</div>
+      <div class="actions editor-actions">
+        <button type="button" id="btnRotateLeft" class="btn ghost" title="Q">↻ Q</button>
+        <button type="button" id="btnRotateRight" class="btn ghost" title="E">↺ E</button>
+        <button type="button" id="btnDeleteProp" class="btn danger">Удалить</button>
+        <button type="button" id="btnCancelPlace" class="btn ghost">Отмена</button>
+      </div>
+
+      <h3 class="catalog-subtitle">Сцена объектов</h3>
+      <div class="actions editor-actions">
+        <button type="button" id="btnSaveProps" class="btn primary">Сохранить</button>
+        <button type="button" id="btnLoadProps" class="btn ghost">Загрузить</button>
+        <button type="button" id="btnDownloadJson" class="btn ghost">Скачать JSON</button>
+        <button type="button" id="btnUploadJson" class="btn ghost">Загрузить JSON</button>
+        <input type="file" id="jsonFileInput" accept="application/json,.json" hidden />
+      </div>
+      <p class="foot catalog-keys">Q / E — поворот · Delete — удалить · Esc — отмена размещения</p>
+    </aside>
   </div>
   <script type="module" src="app.js"></script>
 </body>
