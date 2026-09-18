@@ -149,7 +149,7 @@ final class WebSocketClient: NSObject {
                             let viewers = json["viewers"] as? Int ?? 0
                             self.onStatus?("в сессии \(self.sessionCode) · зрителей: \(viewers)")
                         case "ack":
-                            if let of = json["of"] as? String, of == "mesh_update",
+                            if let of = json["of"] as? String, (of == "mesh_update" || of == "mesh_tiles"),
                                let viewers = json["viewers"] as? Int {
                                 if viewers == 0 {
                                     self.onStatus?("сайт не в сессии — открой тот же код")

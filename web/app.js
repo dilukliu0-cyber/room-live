@@ -63,6 +63,80 @@ const entityMap = new Map();
 const meshChunkMap = new Map();
 const meshGroup = new THREE.Group();
 scene.add(meshGroup);
+/** @type {Map<string, THREE.Mesh>} */
+const meshChunkMap = new Map();
+const meshGroup = new THREE.Group();
+scene.add(meshGroup);
+
+/** Faint world-XZ tile grid helper (matches iOS tileSize). */
+let tileGridHelper = null;
+let currentTileSize = 1.0;
+
+function ensureTileGridHelper(tileSize = 1.0) {
+  const size = Number(tileSize) || 1.0;
+  if (tileGridHelper && currentTileSize === size) return;
+  if (tileGridHelper) {
+    scene.remove(tileGridHelper);
+    disposeObject(tileGridHelper);
+    tileGridHelper = null;
+  }
+  currentTileSize = size;
+  const extent = 20; // meters
+  const divisions = Math.max(2, Math.round(extent / size));
+  tileGridHelper = new THREE.GridHelper(extent, divisions, 0x2a4a3a, 0x152820);
+  tileGridHelper.material.opacity = 0.35;
+  tileGridHelper.material.transparent = true;
+  tileGridHelper.position.y = 0.01;
+  scene.add(tileGridHelper);
+}
+
+function removeTileMeshes(ids) {
+  if (!Array.isArray(ids)) return;
+  for (const id of ids) {
+    const mesh = meshChunkMap.get(id);
+    if (!mesh) continue;
+    meshGroup.remove(mesh);
+    disposeObject(mesh);
+    meshChunkMap.delete(id);
+  }
+}
+
+function applyMeshTilesPayload(msg) {
+  const tileSize = msg.tileSize ?? 1.0;
+  ensureTileGridHelper(tileSize);
+  if (Array.isArray(msg.cleared) && msg.cleared.length) {
+    removeTileMeshes(msg.cleared);
+  }
+  const tiles = msg.tiles || [];
+  let applied = 0;
+  for (const tile of tiles) {
+    // Normalize to upsertMeshChunk shape (positions alias already supported).
+    const chunk = {
+      id: tile.id,
+      positions: tile.positions || tile.vertices,
+      vertices: tile.positions || tile.vertices,
+      indices: tile.indices,
+      colors: tile.colors,
+    };
+    if (upsertMeshChunk(chunk)) applied += 1;
+  }
+  meshUpdateCount += 1;
+  scene.fog = null;
+
+  const nV = [...meshChunkMap.values()].reduce((acc, m) => {
+    const attr = m.geometry?.getAttribute('position');
+    return acc + (attr ? attr.count : 0);
+  }, 0);
+  metaEl.textContent = `LiDAR квадраты · тайлов: ${meshChunkMap.size} · вершин: ${nV} · size ${tileSize}m`;
+  setStatus(`квадраты live · in=${tiles.length} ok=${applied} · ${nV} verts`, 'ok');
+  setDebug('mesh_tiles', tiles.length);
+  const now = performance.now();
+  if (meshUpdateCount <= 30 || now - lastFitAt > 600) {
+    lastFitAt = now;
+    fitCameraToMeshes();
+  }
+}
+
 
 /** Catalog props (editor) — never mixed into LiDAR meshGroup */
 const propsGroup = new THREE.Group();
@@ -560,6 +634,12 @@ function connect(codeToJoin) {
         applyMeshPayload(msg);
         setDebug('mesh_update', nChunks);
         console.log('[room-live] mesh_update', nChunks, 'chunks');
+        break;
+      }
+      case 'mesh_tiles': {
+        const nTiles = Array.isArray(msg.tiles) ? msg.tiles.length : 0;
+        applyMeshTilesPayload(msg);
+        console.log('[room-live] mesh_tiles', nTiles, 'cleared', (msg.cleared || []).length);
         break;
       }
       case 'error':

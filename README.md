@@ -3,7 +3,7 @@
 **Живое сканирование комнаты:** iPhone (LiDAR) → WebSocket → сайт с Three.js.
 
 Два режима на телефоне:
-1. **LiDAR mesh** (основной) — плотный цветной меш как «сфотографированный» скан, собирается на сайте кусок за куском (`mesh_update`).
+1. **LiDAR mesh** (основной) — плотный цветной меш по **квадратам 1 м** (`mesh_tiles`): готовые тайлы не перезаписываются при повторном проходе; тап = перескан только этого квадрата. Старый `mesh_update` ещё поддерживается.
 2. **RoomPlan** — схематические стены / двери / окна / мебель (`room_update`).
 
 Нужен **iPhone с LiDAR** (Pro / Pro Max или iPad Pro с LiDAR).
@@ -59,7 +59,7 @@ room-live/
 - Статика из `../web`
 - WebSocket на том же порту, `maxPayload` 8MB (плотный mesh)
 - Роли: `phone` / `web`
-- Типы: `room_update` / `room_final` / **`mesh_update`**
+- Типы: `room_update` / `room_final` / **`mesh_tiles`** / `mesh_update` (compat)
 
 ### WS API (кратко)
 
@@ -68,8 +68,24 @@ room-live/
 | `create_session` | web | создать код |
 | `join` `{role, code}` | phone/web | войти в сессию |
 | `room_update` / `room_final` | phone | схематичная геометрия RoomPlan |
-| `mesh_update` | phone | плотный LiDAR mesh |
+| `mesh_tiles` | phone | LiDAR по world-XZ квадратам (persist) |
+| `mesh_update` | phone | плотный LiDAR mesh (compat) |
 | `ping` | любой | → `pong` |
+
+### mesh_tiles
+
+```json
+{
+  "type": "mesh_tiles",
+  "tileSize": 1.0,
+  "tiles": [
+    { "id": "3_-2", "state": "ready", "positions": [x,y,z,...], "indices": [...], "colors": [r,g,b,...] }
+  ],
+  "cleared": ["id-of-tile-being-regenerated"]
+}
+```
+
+Веб хранит меши в `Map` по **tile id**. Готовый квадрат на iOS не шлётся заново при ревизите (пока не тап-перескан).
 
 ### mesh_update
 

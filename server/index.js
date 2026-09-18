@@ -199,25 +199,33 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
-    if (type === 'mesh_update') {
+    if (type === 'mesh_update' || type === 'mesh_tiles') {
       if (meta.role !== 'phone' || !meta.code) {
-        console.log(`[room-live] error not_phone on mesh_update role=${meta.role}`);
+        console.log(`[room-live] error not_phone on ${type} role=${meta.role}`);
         send(ws, { type: 'error', message: 'not_phone' });
         return;
       }
       const { session } = getOrCreateSession(meta.code);
-      const chunkCount = Array.isArray(msg.chunks) ? msg.chunks.length : 0;
+      const chunkCount = type === 'mesh_tiles'
+        ? (Array.isArray(msg.tiles) ? msg.tiles.length : 0)
+        : (Array.isArray(msg.chunks) ? msg.chunks.length : 0);
       const viewers = session.webs.size;
       let vertHint = 0;
-      if (chunkCount > 0 && Array.isArray(msg.chunks[0].vertices)) vertHint = msg.chunks[0].vertices.length / 3;
+      if (type === 'mesh_tiles') {
+        const t0 = Array.isArray(msg.tiles) && msg.tiles[0];
+        if (t0 && Array.isArray(t0.positions)) vertHint = t0.positions.length / 3;
+        else if (t0 && Array.isArray(t0.vertices)) vertHint = t0.vertices.length / 3;
+      } else if (chunkCount > 0 && Array.isArray(msg.chunks[0].vertices)) {
+        vertHint = msg.chunks[0].vertices.length / 3;
+      }
       // Forward raw phone JSON to webs — avoids double JSON.stringify memory blow.
       for (const client of session.webs) {
         if (client.readyState === 1) client.send(rawText);
       }
       if (viewers === 0) {
-        console.warn(`[room-live] WARN mesh_update viewers=0 chunks=${chunkCount} bytes=${byteLen} code=${meta.code}`);
+        console.warn(`[room-live] WARN ${type} viewers=0 chunks=${chunkCount} bytes=${byteLen} code=${meta.code}`);
       } else {
-        console.log(`[room-live] mesh_update relay chunks=${chunkCount} viewers=${viewers} verts0=${Math.floor(vertHint)} bytes=${byteLen} code=${meta.code}`);
+        console.log(`[room-live] ${type} relay chunks=${chunkCount} viewers=${viewers} verts0=${Math.floor(vertHint)} bytes=${byteLen} code=${meta.code}`);
       }
       send(ws, {
         type: 'ack',
